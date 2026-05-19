@@ -106,16 +106,6 @@ function AmbientStage() {
           }}
         />
       ))}
-      <div className="hud-panel hud-top">
-        <span>SCREEN ROUTING / 屏幕选择</span>
-        <b>D1 / DISPLAY</b>
-        <i />
-      </div>
-      <div className="hud-panel hud-bottom">
-        <span>WEBGL DEBUG / 调试</span>
-        <b>POINTS 123,900</b>
-        <b>LINES 21,244</b>
-      </div>
     </div>
   )
 }
@@ -648,7 +638,12 @@ function EntryCard({ entry }) {
   )
 }
 
-function SuccessPage({ entry, onRestart }) {
+function SuccessPage({ entry, onReturnHome }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onReturnHome, 2000)
+    return () => window.clearTimeout(timer)
+  }, [onReturnHome])
+
   return (
     <main className="screen success-screen">
       <AmbientStage />
@@ -660,8 +655,8 @@ function SuccessPage({ entry, onRestart }) {
         </h1>
         <EntryCard entry={entry} />
         <p className="look-up">请抬头看向大屏，等待合奏开始。</p>
-        <button className="ghost-action" type="button" onClick={onRestart}>
-          Add Another Voice
+        <button className="ghost-action" type="button" onClick={onReturnHome}>
+          Back to Ensemble
         </button>
       </section>
     </main>
@@ -694,9 +689,9 @@ function App() {
           {step === 'success' && latestEntry && (
             <SuccessPage
               entry={latestEntry}
-              onRestart={() => {
+              onReturnHome={() => {
                 setLatestEntry(null)
-                setStep('form')
+                setStep('entrance')
               }}
             />
           )}
