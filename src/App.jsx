@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './index.css'
-import { createCheckin, fetchCheckins } from './lib/api'
+import {
+  createGuest,
+  fetchActivePoster,
+  fetchGuests,
+  fetchProgram,
+  fetchWorks,
+} from './lib/api'
 
 const identityOptions = ['老师', '本课程同学', '其他学生', '其他观众']
-
-const storageKey = 'ensemble-check-in-entries'
-const stepLabels = ['NAME', 'PHOTO', 'ROLE', 'JOIN']
+const storageKey = 'show-plan-event-guests-cache'
+const stepLabels = ['NAME', 'SELFIE', 'ROLE', 'JOIN']
 
 function getIdentityTone(identity) {
   const toneMap = {
@@ -18,19 +23,62 @@ function getIdentityTone(identity) {
   return toneMap[identity] || 'other-visitor'
 }
 
-function saveEntry(entry) {
-  const existingEntries = JSON.parse(localStorage.getItem(storageKey) || '[]')
-  const nextEntries = [...existingEntries, entry]
-  localStorage.setItem(storageKey, JSON.stringify(nextEntries))
-  return nextEntries
-}
-
 function loadEntries() {
   try {
-    return JSON.parse(localStorage.getItem(storageKey) || '[]')
+    return JSON.parse(localStorage.getItem(storageKey) || '[]').map(normalizeGuest)
   } catch {
     return []
   }
+}
+
+function isHttpsUrl(value) {
+  if (!value) {
+    return false
+  }
+
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function normalizeGuest(guest) {
+  return {
+    ...guest,
+    fullName: guest.fullName || guest.name || '',
+    name: guest.fullName || guest.name || 'Unnamed Guest',
+    identity: guest.identity || '',
+    photo: guest.selfieThumbnailUrl || guest.selfieUrl || guest.photo || '',
+    selfieUrl: guest.selfieUrl || guest.photo || '',
+    selfieThumbnailUrl: guest.selfieThumbnailUrl || guest.selfieUrl || guest.photo || '',
+    timestamp:
+      guest.createdAt ||
+      guest.updatedAt ||
+      guest.timestamp ||
+      guest.registeredAt ||
+      new Date().toISOString(),
+  }
+}
+
+function getPosterImage(poster) {
+  if (!poster) {
+    return ''
+  }
+
+  return poster.imageUrl || poster.posterUrl || poster.url || poster.src || ''
+}
+
+function getPosterTitle(poster) {
+  if (!poster) {
+    return ''
+  }
+
+  return poster.title || poster.name || poster.alt || '活动海报'
+}
+
+function getWorkTitle(work) {
+  return work.title || work.name || work.prompt || work.description || 'Untitled Work'
 }
 
 function isExpiredInvite() {
@@ -110,15 +158,15 @@ function AmbientStage() {
 function SignalPills() {
   return (
     <div className="signal-pills" aria-hidden="true">
-      <span>System Loading...</span>
-      <span>Voices Joining...</span>
-      <span>Visual / Interaction / Sound</span>
+      <span>Program Live</span>
+      <span>Guests Joining</span>
+      <span>Poster / Works / Sign-in</span>
     </div>
   )
 }
 
 function Avatar({ entry, className = '' }) {
-  const initial = (entry.name || '?').trim().slice(0, 1).toUpperCase()
+  const initial = (entry.name || entry.fullName || '?').trim().slice(0, 1).toUpperCase()
   const toneClass = `avatar-${getIdentityTone(entry.identity)}`
 
   return entry.photo ? (
@@ -136,14 +184,14 @@ function FloatingMembers({ entries }) {
   if (visibleEntries.length === 0) {
     return (
       <div className="empty-ensemble">
-        <span>NO VOICES YET</span>
-        <p>等待第一位成员加入合奏。</p>
+        <span>NO GUESTS YET</span>
+        <p>等待第一位来宾登记。</p>
       </div>
     )
   }
 
   return (
-    <div className="members-field" aria-label="正在参与合奏的成员">
+    <div className="members-field" aria-label="已登记来宾">
       {visibleEntries.map((entry, index) => (
         <div
           className="floating-member"
@@ -163,21 +211,62 @@ function FloatingMembers({ entries }) {
   )
 }
 
-function EntrancePage({ entries, onEnter }) {
+function EventOverview({ poster, program, works }) {
+  const posterImage = getPosterImage(poster)
+  const visibleWorks = works.slice(0, 4)
+
+  if (!posterImage && !program?.text && visibleWorks.length === 0) {
+    return null
+  }
+
+  return (
+    <section className="event-overview" aria-label="活动信息">
+      {posterImage && (
+        <article className="info-panel poster-panel">
+          <span>ACTIVE POSTER</span>
+          <img alt={getPosterTitle(poster)} src={posterImage} />
+        </article>
+      )}
+
+      {program?.text && (
+        <article className="info-panel">
+          <span>PROGRAM</span>
+          <p>{program.text}</p>
+        </article>
+      )}
+
+      {visibleWorks.length > 0 && (
+        <article className="info-panel">
+          <span>WORKS</span>
+          <ul className="info-list">
+            {visibleWorks.map((work, index) => (
+              <li key={work.id || work.slug || `${getWorkTitle(work)}-${index}`}>
+                {getWorkTitle(work)}
+              </li>
+            ))}
+          </ul>
+        </article>
+      )}
+    </section>
+  )
+}
+
+function EntrancePage({ entries, onEnter, poster, program, works }) {
   return (
     <main className="screen entrance-screen members-screen">
       <AmbientStage />
       <section className="members-home page-fade">
         <div className="members-heading">
           <SignalPills />
-          <p className="eyebrow">合奏 Ensemble</p>
-          <h1>正在参与合奏的成员</h1>
-          <p>圆形头像与名字正在现场中漂浮。加入后，你也会成为其中一个声部。</p>
+          <p className="eyebrow">Guest Check-in</p>
+          <h1>正在登记的来宾</h1>
+          <p>头像与名字会在现场中漂浮。完成登记后，你也会出现在这里。</p>
         </div>
+        <EventOverview poster={poster} program={program} works={works} />
         <FloatingMembers entries={entries} />
         <div className="members-action">
           <button className="primary-action" type="button" onClick={onEnter}>
-            加入合奏
+            开始登记
           </button>
         </div>
       </section>
@@ -192,8 +281,8 @@ function ExpiredPage() {
       <section className="success-shell page-fade">
         <p className="eyebrow">ENTRY CLOSED</p>
         <h1>
-          This Ensemble entrance has expired.
-          <span>本次合奏入口已失效。</span>
+          This guest entrance has expired.
+          <span>本次来宾入口已失效。</span>
         </h1>
         <p className="look-up">请向现场工作人员获取新的签到二维码。</p>
       </section>
@@ -212,7 +301,7 @@ async function getCameraStream() {
       audio: false,
       video: {
         ...baseVideo,
-        facingMode: { ideal: 'user' },
+        facingMode: { ideal: 'environment' },
       },
     })
   } catch {
@@ -223,7 +312,14 @@ async function getCameraStream() {
   }
 }
 
-function CameraCapture({ photo, onCapture }) {
+function PhotoUrlCapture({
+  previewUrl,
+  selfieUrl,
+  selfieThumbnailUrl,
+  onSelfieUrlChange,
+  onSelfieThumbnailUrlChange,
+  onLocalPreviewChange,
+}) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const [cameraState, setCameraState] = useState('idle')
@@ -252,7 +348,7 @@ function CameraCapture({ photo, onCapture }) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
-      setMessage('')
+      setMessage('摄像头已打开。拍摄后会更新当前设备预览。')
       setCameraState('ready')
     } catch {
       setCameraState('error')
@@ -288,19 +384,15 @@ function CameraCapture({ photo, onCapture }) {
       512,
       512,
     )
-    onCapture(canvas.toDataURL('image/jpeg', 0.78))
-  }
-
-  function retakePhoto() {
-    onCapture('')
-    startCamera()
+    onLocalPreviewChange(canvas.toDataURL('image/jpeg', 0.78))
+    setMessage('已更新摄像头预览。提交时仍会使用你填写的 HTTPS 图片链接。')
   }
 
   return (
     <div className="camera-capture">
       <div className="camera-preview">
-        {photo ? (
-          <img src={photo} alt="已拍摄头像预览" />
+        {previewUrl ? (
+          <img src={previewUrl} alt="头像预览" />
         ) : (
           <>
             <video ref={videoRef} playsInline muted />
@@ -308,34 +400,71 @@ function CameraCapture({ photo, onCapture }) {
           </>
         )}
       </div>
+
+      <div className="url-fields">
+        <label className="field-block focus-field">
+          <span>头像图片 HTTPS 链接</span>
+          <input
+            autoComplete="off"
+            inputMode="url"
+            onChange={(event) => onSelfieUrlChange(event.target.value)}
+            placeholder="https://example.com/selfie.jpg"
+            type="url"
+            value={selfieUrl}
+          />
+        </label>
+        <label className="field-block focus-field">
+          <span>缩略图 HTTPS 链接（可选）</span>
+          <input
+            autoComplete="off"
+            inputMode="url"
+            onChange={(event) => onSelfieThumbnailUrlChange(event.target.value)}
+            placeholder="留空则默认使用上方图片链接"
+            type="url"
+            value={selfieThumbnailUrl}
+          />
+        </label>
+      </div>
+
+      <p className="camera-note">
+        后端当前只接受公开 HTTPS 图片 URL。摄像头拍摄只用于当前设备预览，不提供本地文件上传入口。
+      </p>
       {message && <p className="camera-message">{message}</p>}
+
       <div className="camera-actions">
-        <button className="ghost-action" type="button" onClick={photo ? retakePhoto : startCamera}>
-          {photo ? '重新拍摄' : cameraState === 'ready' ? '重启摄像头' : '打开摄像头'}
+        <button className="ghost-action" type="button" onClick={startCamera}>
+          {cameraState === 'ready' ? '重启摄像头' : '打开后置摄像头'}
         </button>
-        {!photo && (
-          <button
-            className="primary-action"
-            disabled={cameraState !== 'ready'}
-            type="button"
-            onClick={captureFromVideo}
-          >
-            拍摄头像
-          </button>
-        )}
+        <button
+          className="primary-action"
+          disabled={cameraState !== 'ready'}
+          type="button"
+          onClick={captureFromVideo}
+        >
+          拍摄头像预览
+        </button>
       </div>
     </div>
   )
 }
 
-function CheckInForm({ onSubmit }) {
+function CheckInForm({ onSubmit, submitting, submitError }) {
   const [formStep, setFormStep] = useState(0)
+  const [localPreviewUrl, setLocalPreviewUrl] = useState('')
   const [formData, setFormData] = useState({
-    name: '',
-    photo: '',
+    fullName: '',
+    selfieUrl: '',
+    selfieThumbnailUrl: '',
     identity: '',
   })
   const [errors, setErrors] = useState({})
+
+  const remotePreviewUrl = isHttpsUrl(formData.selfieThumbnailUrl)
+    ? formData.selfieThumbnailUrl
+    : isHttpsUrl(formData.selfieUrl)
+      ? formData.selfieUrl
+      : ''
+  const previewUrl = remotePreviewUrl || localPreviewUrl
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }))
@@ -345,8 +474,23 @@ function CheckInForm({ onSubmit }) {
   function validateStep(step = formStep) {
     const nextErrors = {}
 
-    if (step === 0 && !formData.name.trim()) {
-      nextErrors.name = '请输入你的姓名或昵称'
+    if (step === 0 && !formData.fullName.trim()) {
+      nextErrors.fullName = '请输入你的姓名或昵称'
+    }
+
+    if (step === 1) {
+      if (!formData.selfieUrl.trim()) {
+        nextErrors.selfieUrl = '请输入可公开访问的 HTTPS 图片链接'
+      } else if (!isHttpsUrl(formData.selfieUrl.trim())) {
+        nextErrors.selfieUrl = '头像图片必须是 HTTPS 链接'
+      }
+
+      if (
+        formData.selfieThumbnailUrl.trim() &&
+        !isHttpsUrl(formData.selfieThumbnailUrl.trim())
+      ) {
+        nextErrors.selfieThumbnailUrl = '缩略图必须是 HTTPS 链接'
+      }
     }
 
     if (step === 2 && !formData.identity) {
@@ -380,26 +524,27 @@ function CheckInForm({ onSubmit }) {
   function handleSubmit(event) {
     event.preventDefault()
 
-    if (!formData.name.trim()) {
+    if (!validateStep(0)) {
       setFormStep(0)
-      setErrors({ name: '请输入你的姓名或昵称' })
       return
     }
 
-    if (!formData.identity) {
+    if (!validateStep(1)) {
+      setFormStep(1)
+      return
+    }
+
+    if (!validateStep(2)) {
       setFormStep(2)
-      setErrors({ identity: '请选择身份' })
       return
     }
 
-    const entry = {
-      name: formData.name.trim(),
-      photo: formData.photo,
+    onSubmit({
+      fullName: formData.fullName.trim(),
       identity: formData.identity,
-      timestamp: new Date().toISOString(),
-    }
-
-    onSubmit(entry)
+      selfieUrl: formData.selfieUrl.trim(),
+      selfieThumbnailUrl: formData.selfieThumbnailUrl.trim() || formData.selfieUrl.trim(),
+    })
   }
 
   return (
@@ -409,10 +554,8 @@ function CheckInForm({ onSubmit }) {
         <SignalPills />
         <div className="section-heading">
           <p className="eyebrow">CHECK-IN SIGNAL</p>
-          <h1>Leave Your Voice / 留下你的声部</h1>
-          <p>
-            你的输入将成为现场合奏的一部分，并可能在“声成”与“回响”环节中出现。
-          </p>
+          <h1>Guest Registration / 来宾登记</h1>
+          <p>请填写姓名、身份与公开 HTTPS 头像链接，登记后头像会出现在现场来宾列表中。</p>
         </div>
 
         <div className="step-progress" aria-label="check-in progress">
@@ -434,7 +577,7 @@ function CheckInForm({ onSubmit }) {
                 <input
                   autoComplete="name"
                   autoFocus
-                  onChange={(event) => updateField('name', event.target.value)}
+                  onChange={(event) => updateField('fullName', event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault()
@@ -442,9 +585,9 @@ function CheckInForm({ onSubmit }) {
                     }
                   }}
                   placeholder="请输入你的姓名或昵称"
-                  value={formData.name}
+                  value={formData.fullName}
                 />
-                {errors.name && <em>{errors.name}</em>}
+                {errors.fullName && <em>{errors.fullName}</em>}
               </label>
               <button className="primary-action submit-action" type="button" onClick={goNext}>
                 Continue / 继续
@@ -453,20 +596,26 @@ function CheckInForm({ onSubmit }) {
           )}
 
           {formStep === 1 && (
-            <section className="form-step page-fade" aria-label="拍摄头像">
+            <section className="form-step page-fade" aria-label="头像链接">
               <div className="field-block">
-                <span>拍摄参展人员头像</span>
-                <CameraCapture
-                  photo={formData.photo}
-                  onCapture={(photo) => updateField('photo', photo)}
+                <span>头像图片</span>
+                <PhotoUrlCapture
+                  onLocalPreviewChange={setLocalPreviewUrl}
+                  onSelfieThumbnailUrlChange={(value) => updateField('selfieThumbnailUrl', value)}
+                  onSelfieUrlChange={(value) => updateField('selfieUrl', value)}
+                  previewUrl={previewUrl}
+                  selfieThumbnailUrl={formData.selfieThumbnailUrl}
+                  selfieUrl={formData.selfieUrl}
                 />
+                {errors.selfieUrl && <em>{errors.selfieUrl}</em>}
+                {errors.selfieThumbnailUrl && <em>{errors.selfieThumbnailUrl}</em>}
               </div>
               <div className="step-actions two-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
                   Back
                 </button>
                 <button className="primary-action" type="button" onClick={goNext}>
-                  {formData.photo ? 'Continue / 继续' : 'Skip / 跳过'}
+                  Continue / 继续
                 </button>
               </div>
             </section>
@@ -479,9 +628,7 @@ function CheckInForm({ onSubmit }) {
                 <div className="option-grid identity-grid">
                   {identityOptions.map((option) => (
                     <label
-                      className={
-                        formData.identity === option ? 'option selected' : 'option'
-                      }
+                      className={formData.identity === option ? 'option selected' : 'option'}
                       key={option}
                     >
                       <input
@@ -505,19 +652,32 @@ function CheckInForm({ onSubmit }) {
           )}
 
           {formStep === 3 && (
-            <section className="form-step join-step page-fade" aria-label="加入合奏">
+            <section className="form-step join-step page-fade" aria-label="完成登记">
               <div className="join-summary">
-                <span>READY TO JOIN</span>
-                <Avatar entry={formData} className="join-avatar" />
-                <strong>{formData.name || 'Unnamed Voice'}</strong>
-                <p>{formData.identity}</p>
+                <span>READY TO REGISTER</span>
+                <Avatar
+                  entry={{
+                    fullName: formData.fullName,
+                    name: formData.fullName,
+                    identity: formData.identity,
+                    photo: previewUrl,
+                  }}
+                  className="join-avatar"
+                />
+                <strong>{formData.fullName || 'Unnamed Guest'}</strong>
+                <p>{formData.identity || 'Identity Pending'}</p>
+                <p className="join-caption">
+                  提交时将写入公开 API：`fullName`、`identity`、`selfieUrl`、
+                  `selfieThumbnailUrl`
+                </p>
               </div>
+              {submitError && <p className="submit-error">{submitError}</p>}
               <div className="step-actions two-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
                   Back
                 </button>
-                <button className="primary-action submit-action" type="submit">
-                  Join the Ensemble / 加入合奏
+                <button className="primary-action submit-action" disabled={submitting} type="submit">
+                  {submitting ? 'Submitting...' : 'Submit / 提交'}
                 </button>
               </div>
             </section>
@@ -532,7 +692,7 @@ function EntryCard({ entry }) {
   return (
     <article className="entry-card">
       <div className="entry-card-top">
-        <span>Ensemble Entry Card</span>
+        <span>Guest Entry Card</span>
         <b>LIVE</b>
       </div>
       <dl>
@@ -548,11 +708,11 @@ function EntryCard({ entry }) {
         </div>
         <div>
           <dt>Identity</dt>
-          <dd>{entry.identity}</dd>
+          <dd>{entry.identity || 'Unknown'}</dd>
         </div>
         <div>
           <dt>Status</dt>
-          <dd>Ready to Generate</dd>
+          <dd>Registered</dd>
         </div>
       </dl>
     </article>
@@ -569,15 +729,15 @@ function SuccessPage({ entry, onReturnHome }) {
     <main className="screen success-screen">
       <AmbientStage />
       <section className="success-shell page-fade">
-        <p className="eyebrow">VOICE JOINED</p>
+        <p className="eyebrow">REGISTERED</p>
         <h1>
-          You are now part of the Ensemble.
-          <span>你已加入合奏。</span>
+          You are now checked in.
+          <span>你已完成来宾登记。</span>
         </h1>
         <EntryCard entry={entry} />
-        <p className="look-up">请抬头看向大屏，等待合奏开始。</p>
+        <p className="look-up">请抬头看向大屏，等待现场互动开始。</p>
         <button className="ghost-action" type="button" onClick={onReturnHome}>
-          Back to Ensemble
+          Back to Guest List
         </button>
       </section>
     </main>
@@ -589,26 +749,46 @@ function App() {
   const [step, setStep] = useState('entrance')
   const [latestEntry, setLatestEntry] = useState(null)
   const [entries, setEntries] = useState(loadEntries)
+  const [poster, setPoster] = useState(null)
+  const [program, setProgram] = useState(null)
+  const [works, setWorks] = useState([])
   const [syncMessage, setSyncMessage] = useState('syncing')
+  const [submitError, setSubmitError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     let ignore = false
 
-    async function loadRemoteEntries() {
+    async function loadRemoteData() {
       try {
-        const remoteEntries = await fetchCheckins()
-        if (ignore) return
-        localStorage.setItem(storageKey, JSON.stringify(remoteEntries))
-        setEntries(remoteEntries)
+        const [remotePoster, remoteProgram, remoteWorks, remoteGuests] = await Promise.all([
+          fetchActivePoster(),
+          fetchProgram(),
+          fetchWorks(),
+          fetchGuests(),
+        ])
+
+        if (ignore) {
+          return
+        }
+
+        const normalizedGuests = remoteGuests.map(normalizeGuest)
+        localStorage.setItem(storageKey, JSON.stringify(normalizedGuests))
+        setPoster(remotePoster)
+        setProgram(remoteProgram)
+        setWorks(remoteWorks)
+        setEntries(normalizedGuests)
         setSyncMessage('synced')
       } catch (error) {
-        console.warn('Unable to load remote check-ins', error)
-        if (!ignore) setSyncMessage('local')
+        console.warn('Unable to load event data', error)
+        if (!ignore) {
+          setSyncMessage('offline')
+        }
       }
     }
 
-    loadRemoteEntries()
-    const interval = window.setInterval(loadRemoteEntries, 15000)
+    loadRemoteData()
+    const interval = window.setInterval(loadRemoteData, 15000)
     return () => {
       ignore = true
       window.clearInterval(interval)
@@ -616,21 +796,23 @@ function App() {
   }, [])
 
   async function handleSubmit(entry) {
+    setSubmitting(true)
+    setSubmitError('')
+
     try {
-      const savedEntry = await createCheckin(entry)
+      const savedEntry = normalizeGuest({ ...entry, ...(await createGuest(entry)) })
       const nextEntries = [...entries, savedEntry]
       localStorage.setItem(storageKey, JSON.stringify(nextEntries))
       setLatestEntry(savedEntry)
       setEntries(nextEntries)
       setSyncMessage('synced')
+      setStep('success')
     } catch (error) {
-      console.warn('Unable to save remote check-in', error)
-      const nextEntries = saveEntry(entry)
-      setLatestEntry(entry)
-      setEntries(nextEntries)
-      setSyncMessage('local')
+      console.warn('Unable to save remote guest', error)
+      setSubmitError(error.message || '提交失败，请检查图片链接后重试。')
+    } finally {
+      setSubmitting(false)
     }
-    setStep('success')
   }
 
   return (
@@ -640,22 +822,40 @@ function App() {
       ) : (
         <>
           {step === 'entrance' && (
-            <EntrancePage entries={entries} onEnter={() => setStep('form')} />
+            <EntrancePage
+              entries={entries}
+              onEnter={() => setStep('form')}
+              poster={poster}
+              program={program}
+              works={works}
+            />
           )}
-          {step === 'form' && <CheckInForm onSubmit={handleSubmit} />}
+          {step === 'form' && (
+            <CheckInForm
+              onSubmit={handleSubmit}
+              submitError={submitError}
+              submitting={submitting}
+            />
+          )}
           {step === 'success' && latestEntry && (
             <SuccessPage
               entry={latestEntry}
               onReturnHome={() => {
                 setLatestEntry(null)
+                setSubmitError('')
                 setStep('entrance')
               }}
             />
           )}
         </>
       )}
-      <aside className="entry-counter" aria-label="local entry count">
-        {syncMessage === 'synced' ? 'synced voices' : syncMessage === 'syncing' ? 'syncing voices' : 'local voices'}: {entries.length}
+      <aside className="entry-counter" aria-label="guest sync status">
+        {syncMessage === 'synced'
+          ? 'live guests'
+          : syncMessage === 'syncing'
+            ? 'syncing guests'
+            : 'cached guests'}
+        : {entries.length}
       </aside>
     </div>
   )
