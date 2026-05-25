@@ -31,18 +31,6 @@ function loadEntries() {
   }
 }
 
-function isHttpsUrl(value) {
-  if (!value) {
-    return false
-  }
-
-  try {
-    return new URL(value).protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
 function normalizeGuest(guest) {
   return {
     ...guest,
@@ -312,14 +300,7 @@ async function getCameraStream() {
   }
 }
 
-function PhotoUrlCapture({
-  previewUrl,
-  selfieUrl,
-  selfieThumbnailUrl,
-  onSelfieUrlChange,
-  onSelfieThumbnailUrlChange,
-  onLocalPreviewChange,
-}) {
+function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const [cameraState, setCameraState] = useState('idle')
@@ -334,7 +315,7 @@ function PhotoUrlCapture({
 
     if (!window.isSecureContext) {
       setCameraState('error')
-      setMessage('摄像头需要 HTTPS 或 localhost 安全环境。手机扫码访问局域网 HTTP 地址时，浏览器会阻止摄像头。')
+      setMessage('摄像头需要 HTTPS 或 localhost 安全环境。请在受信任的浏览器中重新打开页面。')
       return
     }
 
@@ -348,13 +329,34 @@ function PhotoUrlCapture({
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
-      setMessage('摄像头已打开。拍摄后会更新当前设备预览。')
+      setMessage('后置摄像头已打开。点击开始拍摄后可生成头像预览。')
       setCameraState('ready')
     } catch {
       setCameraState('error')
       setMessage('无法启动摄像头。请确认浏览器已允许摄像头权限，然后重新打开摄像头。')
     }
   }, [])
+
+  useEffect(() => {
+    if (previewUrl || cameraState !== 'idle') {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      startCamera()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [cameraState, previewUrl, startCamera])
+
+  useEffect(() => {
+    if (cameraState !== 'ready' || previewUrl || !videoRef.current || !streamRef.current) {
+      return
+    }
+
+    videoRef.current.srcObject = streamRef.current
+    videoRef.current.play().catch(() => {})
+  }, [cameraState, previewUrl])
 
   useEffect(() => {
     return () => {
@@ -373,6 +375,10 @@ function PhotoUrlCapture({
     canvas.width = 512
     canvas.height = 512
     const context = canvas.getContext('2d')
+    if (!context) {
+      setMessage('当前浏览器无法处理拍照结果。请重试。')
+      return
+    }
     context.drawImage(
       video,
       (video.videoWidth - size) / 2,
@@ -384,8 +390,23 @@ function PhotoUrlCapture({
       512,
       512,
     )
-    onLocalPreviewChange(canvas.toDataURL('image/jpeg', 0.78))
-    setMessage('已更新摄像头预览。提交时仍会使用你填写的 HTTPS 图片链接。')
+    onCapture(canvas.toDataURL('image/jpeg', 0.82))
+    setCameraState('captured')
+    setMessage('已完成拍摄。可以重拍，或确认提交进入下一步。')
+  }
+
+  function retakePhoto() {
+    onRetake()
+    setCameraState('ready')
+    setMessage('已切回摄像头，请重新拍摄。')
+  }
+
+  function confirmPhoto() {
+    if (!previewUrl) {
+      return
+    }
+
+    onConfirm()
   }
 
   return (
@@ -401,48 +422,30 @@ function PhotoUrlCapture({
         )}
       </div>
 
-      <div className="url-fields">
-        <label className="field-block focus-field">
-          <span>头像图片 HTTPS 链接</span>
-          <input
-            autoComplete="off"
-            inputMode="url"
-            onChange={(event) => onSelfieUrlChange(event.target.value)}
-            placeholder="https://example.com/selfie.jpg"
-            type="url"
-            value={selfieUrl}
-          />
-        </label>
-        <label className="field-block focus-field">
-          <span>缩略图 HTTPS 链接（可选）</span>
-          <input
-            autoComplete="off"
-            inputMode="url"
-            onChange={(event) => onSelfieThumbnailUrlChange(event.target.value)}
-            placeholder="留空则默认使用上方图片链接"
-            type="url"
-            value={selfieThumbnailUrl}
-          />
-        </label>
-      </div>
-
       <p className="camera-note">
-        后端当前只接受公开 HTTPS 图片 URL。摄像头拍摄只用于当前设备预览，不提供本地文件上传入口。
+        系统会优先调用后置摄像头。拍摄完成后可重拍，或确认提交继续后续登记。
       </p>
       {message && <p className="camera-message">{message}</p>}
 
       <div className="camera-actions">
-        <button className="ghost-action" type="button" onClick={startCamera}>
-          {cameraState === 'ready' ? '重启摄像头' : '打开后置摄像头'}
-        </button>
-        <button
-          className="primary-action"
-          disabled={cameraState !== 'ready'}
-          type="button"
-          onClick={captureFromVideo}
-        >
-          拍摄头像预览
-        </button>
+        {!previewUrl ? (
+          <button
+            className="primary-action"
+            type="button"
+            onClick={cameraState === 'ready' ? captureFromVideo : startCamera}
+          >
+            开始拍摄
+          </button>
+        ) : (
+          <>
+            <button className="ghost-action" type="button" onClick={retakePhoto}>
+              重拍
+            </button>
+            <button className="primary-action" type="button" onClick={confirmPhoto}>
+              确认提交
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -459,16 +462,25 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
   })
   const [errors, setErrors] = useState({})
 
-  const remotePreviewUrl = isHttpsUrl(formData.selfieThumbnailUrl)
-    ? formData.selfieThumbnailUrl
-    : isHttpsUrl(formData.selfieUrl)
-      ? formData.selfieUrl
-      : ''
-  const previewUrl = remotePreviewUrl || localPreviewUrl
+  const previewUrl = localPreviewUrl || formData.selfieUrl || ''
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }))
     setErrors((current) => ({ ...current, [field]: '' }))
+  }
+
+  function commitSelfieCapture(value) {
+    setFormData((current) => ({
+      ...current,
+      selfieUrl: value,
+      selfieThumbnailUrl: value,
+    }))
+    setLocalPreviewUrl(value)
+    setErrors((current) => ({
+      ...current,
+      selfieUrl: '',
+      selfieThumbnailUrl: '',
+    }))
   }
 
   function validateStep(step = formStep) {
@@ -480,16 +492,9 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
 
     if (step === 1) {
       if (!formData.selfieUrl.trim()) {
-        nextErrors.selfieUrl = '请输入可公开访问的 HTTPS 图片链接'
-      } else if (!isHttpsUrl(formData.selfieUrl.trim())) {
-        nextErrors.selfieUrl = '头像图片必须是 HTTPS 链接'
-      }
-
-      if (
-        formData.selfieThumbnailUrl.trim() &&
-        !isHttpsUrl(formData.selfieThumbnailUrl.trim())
-      ) {
-        nextErrors.selfieThumbnailUrl = '缩略图必须是 HTTPS 链接'
+        nextErrors.selfieUrl = '请先拍摄头像'
+      } else if (!formData.selfieUrl.startsWith('data:image/')) {
+        nextErrors.selfieUrl = '请使用摄像头拍摄后提交'
       }
     }
 
@@ -555,7 +560,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
         <div className="section-heading">
           <p className="eyebrow">CHECK-IN SIGNAL</p>
           <h1>Guest Registration / 来宾登记</h1>
-          <p>请填写姓名、身份与公开 HTTPS 头像链接，登记后头像会出现在现场来宾列表中。</p>
+          <p>请填写姓名、身份，并通过后置摄像头拍摄头像，登记后头像会出现在现场来宾列表中。</p>
         </div>
 
         <div className="step-progress" aria-label="check-in progress">
@@ -596,26 +601,20 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
           )}
 
           {formStep === 1 && (
-            <section className="form-step page-fade" aria-label="头像链接">
+            <section className="form-step page-fade" aria-label="头像拍摄">
               <div className="field-block">
-                <span>头像图片</span>
-                <PhotoUrlCapture
-                  onLocalPreviewChange={setLocalPreviewUrl}
-                  onSelfieThumbnailUrlChange={(value) => updateField('selfieThumbnailUrl', value)}
-                  onSelfieUrlChange={(value) => updateField('selfieUrl', value)}
+                <span>头像拍摄</span>
+                <PhotoCameraCapture
+                  onCapture={commitSelfieCapture}
+                  onConfirm={() => setFormStep(2)}
+                  onRetake={() => commitSelfieCapture('')}
                   previewUrl={previewUrl}
-                  selfieThumbnailUrl={formData.selfieThumbnailUrl}
-                  selfieUrl={formData.selfieUrl}
                 />
                 {errors.selfieUrl && <em>{errors.selfieUrl}</em>}
-                {errors.selfieThumbnailUrl && <em>{errors.selfieThumbnailUrl}</em>}
               </div>
-              <div className="step-actions two-actions">
+              <div className="step-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
                   Back
-                </button>
-                <button className="primary-action" type="button" onClick={goNext}>
-                  Continue / 继续
                 </button>
               </div>
             </section>
@@ -667,8 +666,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                 <strong>{formData.fullName || 'Unnamed Guest'}</strong>
                 <p>{formData.identity || 'Identity Pending'}</p>
                 <p className="join-caption">
-                  提交时将写入公开 API：`fullName`、`identity`、`selfieUrl`、
-                  `selfieThumbnailUrl`
+                  提交时将写入公开 API：`fullName`、`identity` 与拍摄头像
                 </p>
               </div>
               {submitError && <p className="submit-error">{submitError}</p>}
@@ -809,7 +807,7 @@ function App() {
       setStep('success')
     } catch (error) {
       console.warn('Unable to save remote guest', error)
-      setSubmitError(error.message || '提交失败，请检查图片链接后重试。')
+      setSubmitError(error.message || '提交失败，请检查拍摄结果后重试。')
     } finally {
       setSubmitting(false)
     }

@@ -20,8 +20,9 @@
 - `identity`
 - `selfieUrl`
 - `selfieThumbnailUrl`
+- `photo`
 
-后端不接受 base64 图片。当前页面以 HTTPS 图片 URL 作为提交来源；摄像头拍照仅用于当前设备预览，不提供本地文件上传入口。
+当前页面使用后置摄像头拍摄头像，提交时会把拍摄结果以图片数据提交给后端，不再要求填写 HTTPS 图片链接。
 
 ## Local
 
