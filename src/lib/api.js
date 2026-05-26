@@ -1,5 +1,9 @@
-const DEFAULT_EVENT_API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:8787' : ''
+const DEFAULT_EVENT_API_BASE = import.meta.env.DEV
+  ? 'http://127.0.0.1:8787'
+  : 'https://show-plan-event-backend.liucheng-show-plan.workers.dev'
 const DEV_EVENT_API_BASES = ['http://127.0.0.1:8787', 'http://127.0.0.1:8788']
+const EXPLICIT_EVENT_API_BASE = normalizeBase(import.meta.env.VITE_EVENT_API_BASE)
+const CONFIGURED_EVENT_API_BASE = EXPLICIT_EVENT_API_BASE || DEFAULT_EVENT_API_BASE
 
 function normalizeBase(value) {
   return String(value || '')
@@ -11,9 +15,6 @@ function buildApiUrl(base, path) {
   return base ? `${base}${path}` : path
 }
 
-const EXPLICIT_EVENT_API_BASE = normalizeBase(import.meta.env.VITE_EVENT_API_BASE)
-const API_BASE = EXPLICIT_EVENT_API_BASE || DEFAULT_EVENT_API_BASE
-
 function getApiBaseCandidates(base) {
   if (base) {
     return [base]
@@ -23,10 +24,14 @@ function getApiBaseCandidates(base) {
     return DEV_EVENT_API_BASES
   }
 
-  return ['']
+  return []
 }
 
 async function fetchFromCandidateBases(path, options, bases) {
+  if (bases.length === 0) {
+    throw new Error('未配置 Worker API 地址')
+  }
+
   let lastError = null
 
   for (const base of bases) {
@@ -42,9 +47,9 @@ async function fetchFromCandidateBases(path, options, bases) {
 }
 
 async function parseResponse(response) {
-  const data = await response.json().catch(() => null)
+  const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new Error(data?.error || '请求失败')
+    throw new Error(data?.error || `请求失败 (${response.status})`)
   }
   return data
 }
@@ -53,7 +58,7 @@ async function request(path, options) {
   const response = await fetchFromCandidateBases(
     path,
     options,
-    getApiBaseCandidates(EXPLICIT_EVENT_API_BASE || (import.meta.env.DEV ? '' : API_BASE)),
+    getApiBaseCandidates(CONFIGURED_EVENT_API_BASE),
   )
   return parseResponse(response)
 }
@@ -69,22 +74,22 @@ function pickFirst(...values) {
 
 export async function fetchActivePoster() {
   const data = await request('/api/posters/active')
-  return data.poster ?? null
+  return data?.poster ?? null
 }
 
 export async function fetchProgram() {
   const data = await request('/api/program')
-  return data.program ?? null
+  return data?.program ?? null
 }
 
 export async function fetchWorks() {
   const data = await request('/api/works')
-  return data.works ?? []
+  return data?.works ?? []
 }
 
 export async function fetchGuests() {
   const data = await request('/api/guests')
-  return data.guests ?? []
+  return data?.guests ?? []
 }
 
 export async function uploadGuestAvatar(file) {
@@ -113,7 +118,10 @@ export async function uploadGuestAvatar(file) {
     body: formData,
   })
 
-  const completed = data.upload ?? data.result ?? data
+  const completed = data?.upload ?? data?.result ?? data
+  if (!completed) {
+    throw new Error('头像上传失败，请确认 Worker 地址已配置')
+  }
 
   return pickFirst(
     completed.photo,

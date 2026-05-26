@@ -78,6 +78,7 @@
 - `VITE_EVENT_API_BASE`
 
 本地开发时，默认可以指向 `http://127.0.0.1:8787`。
+生产环境默认已指向公开 Worker 地址，如需切换再覆盖此变量。
 
 当前前端上传流程由 Worker 代传文件，浏览器不再直接请求 R2 直连域名。
 `/api/uploads/init` 和 `/api/uploads/complete` 仍保留为兼容接口，但前端主流程使用 `/api/uploads/proxy`。

@@ -27,6 +27,8 @@ Worker 后端在：
 
 - `VITE_EVENT_API_BASE`
 
+本地开发时可以指向 `http://127.0.0.1:8787`。生产环境默认已经硬编码指向公开 Worker 地址，如需改到别的 Worker，再用这个变量覆盖。
+
 当前上传流程和活动 API 走同一个 Worker，不再需要单独的上传 base。
 
 ## Guest payload
