@@ -6,6 +6,7 @@ import {
   fetchGuests,
   fetchProgram,
   fetchWorks,
+  uploadGuestAvatar,
 } from './lib/api'
 
 const identityOptions = ['老师', '本课程同学', '其他学生', '其他观众']
@@ -35,11 +36,10 @@ function normalizeGuest(guest) {
   return {
     ...guest,
     fullName: guest.fullName || guest.name || '',
-    name: guest.fullName || guest.name || 'Unnamed Guest',
-    identity: guest.identity || '',
-    photo: guest.selfieThumbnailUrl || guest.selfieUrl || guest.photo || '',
-    selfieUrl: guest.selfieUrl || guest.photo || '',
-    selfieThumbnailUrl: guest.selfieThumbnailUrl || guest.selfieUrl || guest.photo || '',
+    name: guest.name || guest.fullName || 'Unnamed Guest',
+    identity: guest.identity || guest.role || '',
+    role: guest.role || guest.identity || '',
+    photo: guest.photo || guest.publicUrl || guest.url || guest.imageUrl || '',
     timestamp:
       guest.createdAt ||
       guest.updatedAt ||
@@ -307,41 +307,23 @@ async function getCameraStream() {
   }
 }
 
-async function uploadCapturedSelfie(dataUrl) {
-  if (!dataUrl.startsWith('data:image/')) {
-    return dataUrl
-  }
-
-  const imageResponse = await fetch(dataUrl)
-  const blob = await imageResponse.blob()
-  const ext = blob.type === 'image/png' ? 'png' : 'jpg'
-  const formData = new FormData()
-  formData.append('file', blob, `selfie.${ext}`)
-  formData.append('expire', '86400')
-
-  const uploadResponse = await fetch('https://tmpfiles.org/api/v1/upload', {
-    method: 'POST',
-    body: formData,
-  })
-
-  if (!uploadResponse.ok) {
-    throw new Error('头像上传失败，请重试')
-  }
-
-  const payload = await uploadResponse.json().catch(() => null)
-  const uploadedUrl = payload?.data?.url?.replace('https://tmpfiles.org/', 'https://tmpfiles.org/dl/')
-  if (!uploadedUrl) {
-    throw new Error('头像上传失败，请重试')
-  }
-
-  return uploadedUrl
-}
-
-function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
+function PhotoCameraCapture({
+  previewUrl,
+  onCapture,
+  onRetake,
+  onConfirm,
+  onChooseFile,
+}) {
   const videoRef = useRef(null)
+  const fileInputRef = useRef(null)
   const streamRef = useRef(null)
   const [cameraState, setCameraState] = useState('idle')
   const [message, setMessage] = useState('')
+
+  function stopCameraStream() {
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+  }
 
   const startCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -358,7 +340,7 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
 
     try {
       setCameraState('starting')
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      stopCameraStream()
       const stream = await getCameraStream()
 
       streamRef.current = stream
@@ -397,11 +379,11 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
 
   useEffect(() => {
     return () => {
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      stopCameraStream()
     }
   }, [])
 
-  function captureFromVideo() {
+  async function captureFromVideo() {
     const video = videoRef.current
     if (!video?.videoWidth) {
       return
@@ -427,14 +409,45 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
       512,
       512,
     )
-    onCapture(canvas.toDataURL('image/jpeg', 0.82))
+
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.82),
+    )
+    if (!blob) {
+      setMessage('当前浏览器无法生成头像文件，请重试。')
+      return
+    }
+
+    const file = new File([blob], `guest-avatar-${Date.now()}.jpg`, {
+      type: 'image/jpeg',
+      lastModified: Date.now(),
+    })
+    stopCameraStream()
+    onCapture(file)
     setCameraState('captured')
     setMessage('已完成拍摄。可以重拍，或确认提交进入下一步。')
   }
 
+  function chooseFile() {
+    fileInputRef.current?.click()
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) {
+      return
+    }
+
+    stopCameraStream()
+    onChooseFile(file)
+    setCameraState('captured')
+    setMessage('已选择头像。可以重拍，或确认提交进入下一步。')
+  }
+
   function retakePhoto() {
     onRetake()
-    setCameraState('ready')
+    setCameraState('idle')
     setMessage('已切回摄像头，请重新拍摄。')
   }
 
@@ -448,6 +461,15 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
 
   return (
     <div className="camera-capture">
+      <input
+        accept="image/*"
+        aria-hidden="true"
+        className="sr-only"
+        ref={fileInputRef}
+        tabIndex={-1}
+        type="file"
+        onChange={handleFileChange}
+      />
       <div className="camera-preview">
         {previewUrl ? (
           <img src={previewUrl} alt="头像预览" />
@@ -466,13 +488,18 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
 
       <div className="camera-actions">
         {!previewUrl ? (
-          <button
-            className="primary-action"
-            type="button"
-            onClick={cameraState === 'ready' ? captureFromVideo : startCamera}
-          >
-            开始拍摄
-          </button>
+          <>
+            <button
+              className="ghost-action"
+              type="button"
+              onClick={cameraState === 'ready' ? captureFromVideo : startCamera}
+            >
+              开始拍摄
+            </button>
+            <button className="primary-action" type="button" onClick={chooseFile}>
+              选择头像
+            </button>
+          </>
         ) : (
           <>
             <button className="ghost-action" type="button" onClick={retakePhoto}>
@@ -490,34 +517,45 @@ function PhotoCameraCapture({ previewUrl, onCapture, onRetake, onConfirm }) {
 
 function CheckInForm({ onSubmit, submitting, submitError }) {
   const [formStep, setFormStep] = useState(0)
-  const [localPreviewUrl, setLocalPreviewUrl] = useState('')
+  const [avatarFile, setAvatarFile] = useState(null)
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState('')
+  const avatarPreviewUrlRef = useRef('')
   const [formData, setFormData] = useState({
     fullName: '',
-    selfieUrl: '',
-    selfieThumbnailUrl: '',
     identity: '',
   })
   const [errors, setErrors] = useState({})
 
-  const previewUrl = localPreviewUrl || formData.selfieUrl || ''
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrlRef.current) {
+        URL.revokeObjectURL(avatarPreviewUrlRef.current)
+      }
+    }
+  }, [])
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }))
     setErrors((current) => ({ ...current, [field]: '' }))
   }
 
-  function commitSelfieCapture(value) {
-    setFormData((current) => ({
-      ...current,
-      selfieUrl: value,
-      selfieThumbnailUrl: value,
-    }))
-    setLocalPreviewUrl(value)
+  function commitAvatarFile(file) {
+    if (avatarPreviewUrlRef.current) {
+      URL.revokeObjectURL(avatarPreviewUrlRef.current)
+    }
+
+    const nextPreviewUrl = file ? URL.createObjectURL(file) : ''
+    avatarPreviewUrlRef.current = nextPreviewUrl
+    setAvatarFile(file || null)
+    setAvatarPreviewUrl(nextPreviewUrl)
     setErrors((current) => ({
       ...current,
-      selfieUrl: '',
-      selfieThumbnailUrl: '',
+      avatarFile: '',
     }))
+  }
+
+  function clearAvatarFile() {
+    commitAvatarFile(null)
   }
 
   function validateStep(step = formStep) {
@@ -528,10 +566,8 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
     }
 
     if (step === 1) {
-      if (!formData.selfieUrl.trim()) {
-        nextErrors.selfieUrl = '请先拍摄头像'
-      } else if (!formData.selfieUrl.startsWith('data:image/')) {
-        nextErrors.selfieUrl = '请使用摄像头拍摄后提交'
+      if (!avatarFile) {
+        nextErrors.avatarFile = '请先拍摄头像或选择头像'
       }
     }
 
@@ -582,11 +618,9 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
     }
 
     onSubmit({
-      fullName: formData.fullName.trim(),
-      identity: formData.identity,
-      photo: formData.selfieUrl.trim(),
-      selfieUrl: formData.selfieUrl.trim(),
-      selfieThumbnailUrl: formData.selfieUrl.trim(),
+      name: formData.fullName.trim(),
+      role: formData.identity,
+      photo: avatarFile,
     })
   }
 
@@ -643,12 +677,13 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
               <div className="field-block">
                 <span>头像拍摄</span>
                 <PhotoCameraCapture
-                  onCapture={commitSelfieCapture}
+                  onCapture={commitAvatarFile}
                   onConfirm={() => setFormStep(2)}
-                  onRetake={() => commitSelfieCapture('')}
-                  previewUrl={previewUrl}
+                  onChooseFile={commitAvatarFile}
+                  onRetake={clearAvatarFile}
+                  previewUrl={avatarPreviewUrl}
                 />
-                {errors.selfieUrl && <em>{errors.selfieUrl}</em>}
+                {errors.avatarFile && <em>{errors.avatarFile}</em>}
               </div>
               <div className="step-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
@@ -697,14 +732,14 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                     fullName: formData.fullName,
                     name: formData.fullName,
                     identity: formData.identity,
-                    photo: previewUrl,
+                    photo: avatarPreviewUrl,
                   }}
                   className="join-avatar"
                 />
                 <strong>{formData.fullName || 'Unnamed Guest'}</strong>
                 <p>{formData.identity || 'Identity Pending'}</p>
                 <p className="join-caption">
-                  提交时将写入公开 API：`fullName`、`identity` 与拍摄头像
+                  提交时将写入公开 API：`name`、`role` 与拍摄头像
                 </p>
               </div>
               {submitError && <p className="submit-error">{submitError}</p>}
@@ -836,15 +871,11 @@ function App() {
     setSubmitError('')
 
     try {
-      const uploadedSelfieUrl = await uploadCapturedSelfie(
-        entry.photo || entry.selfieUrl || entry.selfieThumbnailUrl || '',
-      )
+      const uploadedSelfieUrl = await uploadGuestAvatar(entry.photo)
       const guestPayload = {
-        fullName: entry.fullName,
-        identity: entry.identity,
+        name: entry.name,
+        role: entry.role,
         photo: uploadedSelfieUrl,
-        selfieUrl: uploadedSelfieUrl,
-        selfieThumbnailUrl: uploadedSelfieUrl,
       }
       const savedEntry = normalizeGuest({ ...guestPayload, ...(await createGuest(guestPayload)) })
       const nextEntries = [...entries, savedEntry]

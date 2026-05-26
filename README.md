@@ -5,6 +5,8 @@
 - `GET /api/posters/active`
 - `GET /api/program`
 - `GET /api/works`
+- `POST /api/uploads/init`
+- `POST /api/uploads/complete`
 - `GET /api/guests`
 - `POST /api/guests`
 
@@ -16,12 +18,21 @@
 
 来宾登记仅提交以下字段：
 
-- `fullName`
-- `identity`
+- `name`
+- `role`
 - `photo`
 
-当前页面使用后置摄像头拍摄头像，提交时会先上传成可公开访问的图片链接，再把同一链接写入 `photo`、`selfieUrl` 和 `selfieThumbnailUrl` 发送到 `POST /api/guests`。
-来宾头像状态通过 `GET /api/guests` 获取并渲染，最终使用返回的 `photo` 字段显示头像。
+当前页面使用后置摄像头拍摄头像或选择本地图片，前端保留 `File` 对象，不转 base64，不走临时图床。
+
+上传顺序：
+
+1. `POST /api/uploads/init`
+2. 将 `File` 上传到返回的 `uploadURL`
+3. `POST /api/uploads/complete`
+4. `POST /api/guests`
+5. `GET /api/guests`
+
+`POST /api/guests` 只写入 `name`、`role`、`photo`，其中 `photo` 使用 Cloudflare 返回的图片 URL 或 key。来宾头像状态通过 `GET /api/guests` 获取并渲染，最终显示返回的 `photo` 字段。
 
 ## Local
 

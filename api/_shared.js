@@ -10,7 +10,6 @@ export class ApiError extends Error {
 }
 
 const CHECKINS_COLLECTION = process.env.FIREBASE_CHECKINS_COLLECTION || "ensembleCheckins";
-const MAX_PHOTO_LENGTH = 950 * 1024;
 
 function extractJsonObject(value) {
   try {
@@ -119,24 +118,12 @@ export async function createCheckin(input) {
   const name = String(input?.name || "").trim();
   const identity = String(input?.identity || "").trim();
   const aiFeeling = String(input?.aiFeeling || "").trim();
-  const photo = String(input?.photo || "");
+  const photo = String(input?.photo || "").trim();
 
   if (!name) throw new ApiError(400, "请输入你的姓名或昵称");
   if (!identity) throw new ApiError(400, "请选择身份");
   if (!aiFeeling) throw new ApiError(400, "请选择你现在面对 AI 的感觉");
-  if (photo.startsWith("data:image/") && photo.length > MAX_PHOTO_LENGTH) {
-    throw new ApiError(400, "头像图片过大或格式无效");
-  }
-  if (
-    photo &&
-    !(
-      photo.startsWith("data:image/") ||
-      photo.startsWith("https://") ||
-      photo.startsWith("http://")
-    )
-  ) {
-    throw new ApiError(400, "头像图片格式无效");
-  }
+  if (!photo) throw new ApiError(400, "请上传头像");
 
   const timestamp = new Date().toISOString();
   const ref = getAdminDb().collection(CHECKINS_COLLECTION).doc();
