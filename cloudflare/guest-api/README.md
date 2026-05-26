@@ -28,10 +28,10 @@
 2. 创建或绑定 D1
 
    ```bash
-   npx wrangler d1 create ensemble-guest-db
+   npx wrangler d1 create guest_avatars
    ```
 
-   把输出的 `database_id` 填到 `wrangler.jsonc` 里。
+   如果你已经在控制台里创建好了同名数据库，就直接把 `database_id` 填到 `wrangler.jsonc` 里。
 
 3. 配置外部 R2 凭据
 

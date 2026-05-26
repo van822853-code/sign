@@ -15,7 +15,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "ensemble-guest-db",
+      "database_name": "guest_avatars",
       "database_id": "dc4bd94d-c33d-4663-b453-7a3d85a00f5d",
       "migrations_dir": "migrations"
     }
