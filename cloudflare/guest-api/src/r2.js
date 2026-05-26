@@ -256,6 +256,29 @@ export async function createSignedUploadUrl(env, { objectKey, contentType }) {
   })
 }
 
+export async function uploadObjectToR2(env, { objectKey, contentType, body }) {
+  const url = await createSignedUploadUrl(env, { objectKey, contentType })
+  const headers = new Headers()
+
+  if (contentType) {
+    headers.set('Content-Type', String(contentType).trim().toLowerCase())
+  }
+
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body,
+  })
+
+  if (!response.ok) {
+    const error = new Error('上传 R2 对象失败')
+    error.status = response.status === 404 ? 502 : response.status || 502
+    throw error
+  }
+
+  return response
+}
+
 export async function createSignedVerificationUrl(env, { method, objectKey }) {
   const config = resolveR2Config(env)
 

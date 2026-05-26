@@ -1,4 +1,5 @@
 const DEFAULT_EVENT_API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:8787' : ''
+const DEV_EVENT_API_BASES = ['http://127.0.0.1:8787', 'http://127.0.0.1:8788']
 
 function normalizeBase(value) {
   return String(value || '')
@@ -10,8 +11,35 @@ function buildApiUrl(base, path) {
   return base ? `${base}${path}` : path
 }
 
-const API_BASE = normalizeBase(import.meta.env.VITE_EVENT_API_BASE || DEFAULT_EVENT_API_BASE)
-const UPLOAD_API_BASE = normalizeBase(import.meta.env.VITE_UPLOAD_API_BASE || API_BASE)
+const EXPLICIT_EVENT_API_BASE = normalizeBase(import.meta.env.VITE_EVENT_API_BASE)
+const API_BASE = EXPLICIT_EVENT_API_BASE || DEFAULT_EVENT_API_BASE
+
+function getApiBaseCandidates(base) {
+  if (base) {
+    return [base]
+  }
+
+  if (import.meta.env.DEV) {
+    return DEV_EVENT_API_BASES
+  }
+
+  return ['']
+}
+
+async function fetchFromCandidateBases(path, options, bases) {
+  let lastError = null
+
+  for (const base of bases) {
+    try {
+      const response = await fetch(buildApiUrl(base, path), options)
+      return response
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError || new Error('请求失败')
+}
 
 async function parseResponse(response) {
   const data = await response.json().catch(() => null)
@@ -22,12 +50,11 @@ async function parseResponse(response) {
 }
 
 async function request(path, options) {
-  const response = await fetch(buildApiUrl(API_BASE, path), options)
-  return parseResponse(response)
-}
-
-async function uploadRequest(path, options) {
-  const response = await fetch(buildApiUrl(UPLOAD_API_BASE, path), options)
+  const response = await fetchFromCandidateBases(
+    path,
+    options,
+    getApiBaseCandidates(EXPLICIT_EVENT_API_BASE || (import.meta.env.DEV ? '' : API_BASE)),
+  )
   return parseResponse(response)
 }
 
@@ -60,98 +87,33 @@ export async function fetchGuests() {
   return data.guests ?? []
 }
 
-export async function initGuestAvatarUpload(file) {
-  const data = await uploadRequest('/api/uploads/init', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      purpose: 'guest-avatar',
-      fileName: file.name,
-      filename: file.name,
-      contentType: file.type || 'application/octet-stream',
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-    }),
-  })
-
-  return data.upload ?? data.result ?? data
-}
-
-async function uploadFileToDestination(upload, file) {
-  const uploadURL = pickFirst(upload.uploadURL, upload.uploadUrl, upload.url)
-  if (!uploadURL) {
-    throw new Error('缺少上传地址')
-  }
-
-  const method = String(
-    pickFirst(upload.method, upload.httpMethod, upload.uploadMethod, upload.formMethod, upload.fields ? 'POST' : 'PUT'),
-  ).toUpperCase()
-
-  if (upload.fields && typeof upload.fields === 'object') {
-    const formData = new FormData()
-    for (const [key, value] of Object.entries(upload.fields)) {
-      formData.append(key, value)
-    }
-    formData.append(upload.fileField || upload.fileFieldName || 'file', file, file.name)
-
-    const response = await fetch(uploadURL, {
-      method,
-      body: formData,
-    })
-
-    if (!response.ok) {
-      throw new Error('头像上传失败，请重试')
-    }
-
-    return response
-  }
-
-  const headers = new Headers(upload.headers || {})
-  if (!headers.has('Content-Type') && file.type) {
-    headers.set('Content-Type', file.type)
-  }
-
-  const response = await fetch(uploadURL, {
-    method,
-    headers,
-    body: file,
-  })
-
-  if (!response.ok) {
-    throw new Error('头像上传失败，请重试')
-  }
-
-  return response
-}
-
-export async function completeGuestAvatarUpload(upload, file) {
-  const data = await uploadRequest('/api/uploads/complete', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      purpose: 'guest-avatar',
-      uploadId: pickFirst(upload.uploadId, upload.id),
-      key: upload.key,
-      fileName: file.name,
-      filename: file.name,
-      contentType: file.type || 'application/octet-stream',
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-      publicUrl: pickFirst(upload.publicUrl, upload.publicURL, upload.url),
-    }),
-  })
-
-  return data.upload ?? data.result ?? data
-}
-
 export async function uploadGuestAvatar(file) {
-  const init = await initGuestAvatarUpload(file)
-  await uploadFileToDestination(init, file)
-  const completed = await completeGuestAvatarUpload(init, file)
+  const formData = new FormData()
+  formData.append('purpose', 'guest-avatar')
+  formData.append('file', file, file.name)
+  formData.append('fileName', file.name)
+  formData.append('filename', file.name)
+  formData.append('contentType', file.type || 'application/octet-stream')
+  formData.append('mimeType', file.type || 'application/octet-stream')
+  formData.append('size', String(file.size))
+  formData.append(
+    'metadata',
+    JSON.stringify({
+      purpose: 'guest-avatar',
+      fileName: file.name,
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+    }),
+  )
+
+  const data = await request('/api/uploads/proxy', {
+    method: 'POST',
+    body: formData,
+  })
+
+  const completed = data.upload ?? data.result ?? data
 
   return pickFirst(
     completed.photo,
@@ -160,10 +122,6 @@ export async function uploadGuestAvatar(file) {
     completed.url,
     completed.photoUrl,
     completed.key,
-    init.publicUrl,
-    init.publicURL,
-    init.url,
-    init.key,
   )
 }
 

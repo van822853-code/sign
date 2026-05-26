@@ -16,6 +16,7 @@ import {
   deleteObjectFromR2,
   resolveR2Config,
   verifyObjectExists,
+  uploadObjectToR2,
 } from './r2.js'
 import {
   HttpError,
@@ -45,6 +46,121 @@ function ensureImageContentType(contentType) {
     throw new HttpError(415, 'invalid_content_type')
   }
   return normalized
+}
+
+function parseMetadataField(value) {
+  if (value === undefined || value === null || value === '') {
+    return {}
+  }
+
+  if (typeof value !== 'string') {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    throw new HttpError(400, 'invalid_metadata')
+  }
+}
+
+function readFormFile(formData) {
+  const file = formData.get('file')
+  if (!(file instanceof File)) {
+    throw new HttpError(400, 'invalid_file')
+  }
+
+  return file
+}
+
+function readUploadInputFromForm(formData) {
+  const file = readFormFile(formData)
+  const filename = trimString(
+    formData.get('fileName') || formData.get('filename') || formData.get('name') || file.name,
+  )
+  const contentType = ensureImageContentType(
+    formData.get('contentType') || formData.get('mimeType') || file.type,
+  )
+  const sizeBytes = readPositiveInteger(
+    formData.get('sizeBytes') || formData.get('size') || formData.get('fileSize') || file.size,
+    0,
+  )
+  const purpose = trimString(formData.get('purpose')) || 'guest-avatar'
+  const externalUserId = trimString(formData.get('externalUserId') || formData.get('userId'))
+  const metadata = parseMetadataField(formData.get('metadata'))
+
+  if (!filename) {
+    throw new HttpError(400, 'invalid_filename')
+  }
+
+  if (!sizeBytes) {
+    throw new HttpError(400, 'invalid_size')
+  }
+
+  return {
+    file,
+    filename,
+    contentType,
+    sizeBytes,
+    purpose,
+    externalUserId,
+    metadata,
+  }
+}
+
+async function prepareUploadRecord(env, {
+  filename,
+  contentType,
+  sizeBytes,
+  purpose,
+  externalUserId,
+  metadata,
+}) {
+  const maxUploadBytes = readPositiveInteger(env.MAX_UPLOAD_BYTES, 10 * 1024 * 1024)
+  if (sizeBytes > maxUploadBytes) {
+    throw new HttpError(413, 'size_too_large')
+  }
+
+  const r2 = resolveR2Config(env)
+  const createdAt = new Date().toISOString()
+  const uploadId = crypto.randomUUID()
+  const objectKey = buildObjectKey({
+    prefix: r2.prefix,
+    uploadId,
+    filename,
+    contentType,
+    createdAt,
+  })
+  const publicUrl = buildPublicUrl(r2.publicBaseUrl, objectKey)
+  const expiresAt = new Date(Date.now() + r2.expiresInSeconds * 1000).toISOString()
+
+  const record = await createUploadRecord(env, {
+    uploadId,
+    objectKey,
+    publicUrl,
+    purpose,
+    filename,
+    contentType,
+    sizeBytes,
+    metadata: {
+      ...metadata,
+      purpose,
+      fileName: filename,
+      contentType,
+      sizeBytes,
+      externalUserId: externalUserId || undefined,
+    },
+    externalUserId: externalUserId || null,
+    expiresAt,
+  })
+
+  return {
+    record,
+    objectKey,
+    publicUrl,
+    expiresAt,
+  }
 }
 
 function buildBaseUploadPayload(record, uploadUrl) {
@@ -100,46 +216,17 @@ async function handleUploadsInit(env, request) {
     throw new HttpError(400, 'invalid_size')
   }
 
-  const maxUploadBytes = readPositiveInteger(env.MAX_UPLOAD_BYTES, 10 * 1024 * 1024)
-  if (sizeBytes > maxUploadBytes) {
-    throw new HttpError(413, 'size_too_large')
-  }
-
-  const r2 = resolveR2Config(env)
-  const createdAt = new Date().toISOString()
-  const uploadId = crypto.randomUUID()
-  const objectKey = buildObjectKey({
-    prefix: r2.prefix,
-    uploadId,
-    filename,
-    contentType,
-    createdAt,
-  })
-  const publicUrl = buildPublicUrl(r2.publicBaseUrl, objectKey)
-  const expiresAt = new Date(Date.now() + r2.expiresInSeconds * 1000).toISOString()
-
-  const record = await createUploadRecord(env, {
-    uploadId,
-    objectKey,
-    publicUrl,
-    purpose,
+  const { record, publicUrl, expiresAt } = await prepareUploadRecord(env, {
     filename,
     contentType,
     sizeBytes,
-    metadata: {
-      ...metadata,
-      purpose,
-      fileName: filename,
-      contentType,
-      sizeBytes,
-      externalUserId: externalUserId || undefined,
-    },
-    externalUserId: externalUserId || null,
-    expiresAt,
+    purpose,
+    externalUserId,
+    metadata,
   })
 
   const uploadUrl = await createSignedUploadUrl(env, {
-    objectKey,
+    objectKey: record.objectKey,
     contentType,
   })
 
@@ -153,6 +240,74 @@ async function handleUploadsInit(env, request) {
   )
 
   return jsonResponse({ upload: payload, ...payload })
+}
+
+async function handleUploadsProxy(env, request) {
+  const formData = await request.formData().catch(() => {
+    throw new HttpError(400, 'invalid_form_data')
+  })
+
+  const {
+    file,
+    filename,
+    contentType,
+    sizeBytes,
+    purpose,
+    externalUserId,
+    metadata,
+  } = readUploadInputFromForm(formData)
+
+  const { record } = await prepareUploadRecord(env, {
+    filename,
+    contentType,
+    sizeBytes,
+    purpose,
+    externalUserId,
+    metadata,
+  })
+
+  try {
+    await uploadObjectToR2(env, {
+      objectKey: record.objectKey,
+      contentType,
+      body: file,
+    })
+
+    const verification = await verifyObjectExists(env, {
+      objectKey: record.objectKey,
+      contentType,
+    })
+
+    const completed = await completeUploadRecord(env, record.uploadId)
+    const payload = buildUploadResponse(completed, {
+      photo: completed.publicUrl,
+      publicUrl: completed.publicUrl,
+      publicURL: completed.publicUrl,
+      url: completed.publicUrl,
+      photoUrl: completed.publicUrl,
+      r2SizeBytes: verification.sizeBytes,
+      etag: verification.etag,
+    })
+
+    return jsonResponse({ upload: payload, ...payload })
+  } catch (error) {
+    try {
+      await deleteObjectFromR2(env, {
+        objectKey: record.objectKey,
+        contentType,
+      })
+    } catch {
+      // Best-effort cleanup only.
+    }
+
+    try {
+      await deleteUploadRecord(env, record.uploadId)
+    } catch {
+      // Best-effort cleanup only.
+    }
+
+    throw error
+  }
 }
 
 async function handleUploadsComplete(env, request) {
@@ -280,6 +435,10 @@ export default {
 
       if (request.method === 'POST' && pathname === '/api/uploads/complete') {
         return await handleUploadsComplete(env, request)
+      }
+
+      if (request.method === 'POST' && pathname === '/api/uploads/proxy') {
+        return await handleUploadsProxy(env, request)
       }
 
       const uploadMatch = pathname.match(/^\/api\/uploads\/([^/]+)$/)

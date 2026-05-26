@@ -8,10 +8,16 @@ import {
   fetchWorks,
   uploadGuestAvatar,
 } from './lib/api'
+import {
+  clearCheckInDraft,
+  loadCheckInDraft,
+  saveCheckInDraftAvatar,
+  saveCheckInDraftMeta,
+} from './lib/checkInDraft'
 
 const identityOptions = ['老师', '本课程同学', '其他学生', '其他观众']
 const storageKey = 'show-plan-event-guests-cache'
-const stepLabels = ['NAME', 'SELFIE', 'ROLE', 'JOIN']
+const stepLabels = ['姓名', '头像', '身份', '确认']
 
 function getIdentityTone(identity) {
   const toneMap = {
@@ -36,7 +42,7 @@ function normalizeGuest(guest) {
   return {
     ...guest,
     fullName: guest.fullName || guest.name || '',
-    name: guest.name || guest.fullName || 'Unnamed Guest',
+    name: guest.name || guest.fullName || '未命名来宾',
     identity: guest.identity || guest.role || '',
     role: guest.role || guest.identity || '',
     photo: guest.photo || guest.publicUrl || guest.url || guest.imageUrl || '',
@@ -146,9 +152,9 @@ function AmbientStage() {
 function SignalPills() {
   return (
     <div className="signal-pills" aria-hidden="true">
-      <span>Program Live</span>
-      <span>Guests Joining</span>
-      <span>Poster / Works / Sign-in</span>
+      <span>节目</span>
+      <span>来宾</span>
+      <span>活动信息</span>
     </div>
   )
 }
@@ -179,7 +185,7 @@ function FloatingMembers({ entries }) {
   if (visibleEntries.length === 0) {
     return (
       <div className="empty-ensemble">
-        <span>NO GUESTS YET</span>
+        <span>暂无来宾</span>
         <p>等待第一位来宾登记。</p>
       </div>
     )
@@ -218,21 +224,21 @@ function EventOverview({ poster, program, works }) {
     <section className="event-overview" aria-label="活动信息">
       {posterImage && (
         <article className="info-panel poster-panel">
-          <span>ACTIVE POSTER</span>
+          <span>活动海报</span>
           <img alt={getPosterTitle(poster)} src={posterImage} />
         </article>
       )}
 
       {program?.text && (
         <article className="info-panel">
-          <span>PROGRAM</span>
+          <span>节目</span>
           <p>{program.text}</p>
         </article>
       )}
 
       {visibleWorks.length > 0 && (
         <article className="info-panel">
-          <span>WORKS</span>
+          <span>作品</span>
           <ul className="info-list">
             {visibleWorks.map((work, index) => (
               <li key={work.id || work.slug || `${getWorkTitle(work)}-${index}`}>
@@ -253,7 +259,7 @@ function EntrancePage({ entries, onEnter, poster, program, works }) {
       <section className="members-home page-fade">
         <div className="members-heading">
           <SignalPills />
-          <p className="eyebrow">Guest Check-in</p>
+          <p className="eyebrow">来宾登记</p>
           <h1>正在登记的来宾</h1>
           <p>头像与名字会在现场中漂浮。完成登记后，你也会出现在这里。</p>
         </div>
@@ -274,9 +280,9 @@ function ExpiredPage() {
     <main className="screen expired-screen">
       <AmbientStage />
       <section className="success-shell page-fade">
-        <p className="eyebrow">ENTRY CLOSED</p>
+        <p className="eyebrow">入口已关闭</p>
         <h1>
-          This guest entrance has expired.
+          这次来宾入口已失效。
           <span>本次来宾入口已失效。</span>
         </h1>
         <p className="look-up">请向现场工作人员获取新的签到二维码。</p>
@@ -476,7 +482,7 @@ function PhotoCameraCapture({
         ) : (
           <>
             <video ref={videoRef} playsInline muted />
-            {cameraState !== 'ready' && <span>CAMERA INPUT</span>}
+            {cameraState !== 'ready' && <span>相机预览</span>}
           </>
         )}
       </div>
@@ -506,7 +512,7 @@ function PhotoCameraCapture({
               重拍
             </button>
             <button className="primary-action" type="button" onClick={confirmPhoto}>
-              确认提交
+              确认
             </button>
           </>
         )}
@@ -525,14 +531,64 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
     identity: '',
   })
   const [errors, setErrors] = useState({})
+  const [draftReady, setDraftReady] = useState(false)
 
   useEffect(() => {
+    let ignore = false
+
+    async function restoreDraft() {
+      try {
+        const draft = await loadCheckInDraft()
+        if (ignore || !draft) {
+          return
+        }
+
+        setFormStep(Math.max(0, Math.min(draft.formStep ?? 0, stepLabels.length - 1)))
+        setFormData({
+          fullName: draft.formData?.fullName || '',
+          identity: draft.formData?.identity || '',
+        })
+
+        if (draft.avatarFile) {
+          commitAvatarFile(draft.avatarFile)
+        }
+      } catch (error) {
+        console.warn('Unable to restore check-in draft', error)
+      } finally {
+        if (!ignore) {
+          setDraftReady(true)
+        }
+      }
+    }
+
+    restoreDraft()
+
     return () => {
+      ignore = true
       if (avatarPreviewUrlRef.current) {
         URL.revokeObjectURL(avatarPreviewUrlRef.current)
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!draftReady) {
+      return
+    }
+
+    void saveCheckInDraftMeta({
+      formStep,
+      formData,
+    })
+  }, [draftReady, formData, formStep])
+
+  useEffect(() => {
+    if (!draftReady) {
+      return
+    }
+
+    void saveCheckInDraftAvatar(avatarFile)
+  }, [avatarFile, draftReady])
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }))
@@ -630,12 +686,12 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
       <section className="form-shell page-fade">
         <SignalPills />
         <div className="section-heading">
-          <p className="eyebrow">CHECK-IN SIGNAL</p>
-          <h1>Guest Registration / 来宾登记</h1>
+          <p className="eyebrow">来宾登记</p>
+          <h1>来宾登记</h1>
           <p>请填写姓名、身份，并通过后置摄像头拍摄头像，登记后头像会出现在现场来宾列表中。</p>
         </div>
 
-        <div className="step-progress" aria-label="check-in progress">
+        <div className="step-progress" aria-label="登记进度">
           {stepLabels.map((label, index) => (
             <span
               className={index <= formStep ? 'progress-dot active' : 'progress-dot'}
@@ -667,15 +723,15 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                 {errors.fullName && <em>{errors.fullName}</em>}
               </label>
               <button className="primary-action submit-action" type="button" onClick={goNext}>
-                Continue / 继续
+                下一步
               </button>
             </section>
           )}
 
           {formStep === 1 && (
-            <section className="form-step page-fade" aria-label="头像拍摄">
+            <section className="form-step page-fade" aria-label="头像">
               <div className="field-block">
-                <span>头像拍摄</span>
+                <span>头像</span>
                 <PhotoCameraCapture
                   onCapture={commitAvatarFile}
                   onConfirm={() => setFormStep(2)}
@@ -687,7 +743,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
               </div>
               <div className="step-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
-                  Back
+                  返回
                 </button>
               </div>
             </section>
@@ -717,7 +773,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
               </fieldset>
               <div className="step-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
-                  Back
+                  返回
                 </button>
               </div>
             </section>
@@ -726,7 +782,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
           {formStep === 3 && (
             <section className="form-step join-step page-fade" aria-label="完成登记">
               <div className="join-summary">
-                <span>READY TO REGISTER</span>
+                <span>准备提交</span>
                 <Avatar
                   entry={{
                     fullName: formData.fullName,
@@ -736,19 +792,19 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                   }}
                   className="join-avatar"
                 />
-                <strong>{formData.fullName || 'Unnamed Guest'}</strong>
-                <p>{formData.identity || 'Identity Pending'}</p>
+                <strong>{formData.fullName || '未填写姓名'}</strong>
+                <p>{formData.identity || '身份未选择'}</p>
                 <p className="join-caption">
-                  提交时将写入公开 API：`name`、`role` 与拍摄头像
+                  提交后会保存你的姓名、身份和头像
                 </p>
               </div>
               {submitError && <p className="submit-error">{submitError}</p>}
               <div className="step-actions two-actions">
                 <button className="ghost-action" type="button" onClick={goBack}>
-                  Back
+                  返回
                 </button>
                 <button className="primary-action submit-action" disabled={submitting} type="submit">
-                  {submitting ? 'Submitting...' : 'Submit / 提交'}
+                  {submitting ? '提交中...' : '提交'}
                 </button>
               </div>
             </section>
@@ -763,27 +819,27 @@ function EntryCard({ entry }) {
   return (
     <article className="entry-card">
       <div className="entry-card-top">
-        <span>Guest Entry Card</span>
-        <b>LIVE</b>
+        <span>来宾卡片</span>
+        <b>当前</b>
       </div>
       <dl>
         <div>
-          <dt>Avatar</dt>
+          <dt>头像</dt>
           <dd>
             <Avatar entry={entry} className="card-avatar" />
           </dd>
         </div>
         <div>
-          <dt>Name</dt>
+          <dt>姓名</dt>
           <dd>{entry.name}</dd>
         </div>
         <div>
-          <dt>Identity</dt>
-          <dd>{entry.identity || 'Unknown'}</dd>
+          <dt>身份</dt>
+          <dd>{entry.identity || '未填写'}</dd>
         </div>
         <div>
-          <dt>Status</dt>
-          <dd>Registered</dd>
+          <dt>状态</dt>
+          <dd>已登记</dd>
         </div>
       </dl>
     </article>
@@ -800,15 +856,15 @@ function SuccessPage({ entry, onReturnHome }) {
     <main className="screen success-screen">
       <AmbientStage />
       <section className="success-shell page-fade">
-        <p className="eyebrow">REGISTERED</p>
+        <p className="eyebrow">已登记</p>
         <h1>
-          You are now checked in.
+          你已完成登记。
           <span>你已完成来宾登记。</span>
         </h1>
         <EntryCard entry={entry} />
         <p className="look-up">请抬头看向大屏，等待现场互动开始。</p>
         <button className="ghost-action" type="button" onClick={onReturnHome}>
-          Back to Guest List
+          返回来宾列表
         </button>
       </section>
     </main>
@@ -878,6 +934,7 @@ function App() {
         photo: uploadedSelfieUrl,
       }
       const savedEntry = normalizeGuest({ ...guestPayload, ...(await createGuest(guestPayload)) })
+      await clearCheckInDraft()
       const nextEntries = [...entries, savedEntry]
       localStorage.setItem(storageKey, JSON.stringify(nextEntries))
       setLatestEntry(savedEntry)
@@ -926,12 +983,12 @@ function App() {
           )}
         </>
       )}
-      <aside className="entry-counter" aria-label="guest sync status">
+      <aside className="entry-counter" aria-label="现场人数状态">
         {syncMessage === 'synced'
-          ? 'live guests'
+          ? '当前来宾'
           : syncMessage === 'syncing'
-            ? 'syncing guests'
-            : 'cached guests'}
+            ? '同步中'
+            : '离线缓存'}
         : {entries.length}
       </aside>
     </div>
