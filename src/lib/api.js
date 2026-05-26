@@ -1,11 +1,11 @@
 const DEFAULT_EVENT_API_BASE =
-  'https://show-plan-event-backend.liucheng-show-plan.workers.dev'
+  'http://127.0.0.1:8787'
 
 const API_BASE = (import.meta.env.VITE_EVENT_API_BASE || DEFAULT_EVENT_API_BASE).replace(
   /\/$/,
   '',
 )
-const UPLOAD_API_BASE = (import.meta.env.VITE_UPLOAD_API_BASE || '').replace(/\/$/, '')
+const UPLOAD_API_BASE = (import.meta.env.VITE_UPLOAD_API_BASE || API_BASE).replace(/\/$/, '')
 
 async function parseResponse(response) {
   const data = await response.json().catch(() => null)

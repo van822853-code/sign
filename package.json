@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "npm run build && wrangler dev",
+    "worker:dev": "npm --prefix cloudflare/guest-api run dev",
+    "worker:deploy": "npm --prefix cloudflare/guest-api run deploy",
+    "worker:check": "npm --prefix cloudflare/guest-api run check",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
-    "@vercel/node": "^5.8.4",
-    "firebase-admin": "^13.10.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

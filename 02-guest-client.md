@@ -1,6 +1,6 @@
 # 02-guest-client
 
-来宾端签到信息统一由 Cloudflare 上的后端提供。
+来宾端签到信息统一由 `cloudflare/guest-api` 这个 Cloudflare Worker 提供。
 
 ## 接口
 
@@ -19,7 +19,7 @@
 5. 上传成功后调用 `POST /api/uploads/complete`，传 `uploadId`、`key` 等信息。
 6. 后端返回最终可访问的 `photo` URL 或 `photo` key。
 
-上传代理默认部署在同源 `/api/uploads/*`，需要配置 Cloudflare Images 的账号和 API token。
+上传代理默认部署在 Worker 的 `/api/uploads/*`，文件直传到外部 Cloudflare R2，需要配置外部 R2 账号信息和你自己的 D1。
 
 ### 来宾签到
 
