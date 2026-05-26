@@ -1,6 +1,6 @@
 const DEFAULT_EVENT_API_BASE = import.meta.env.DEV
   ? 'http://127.0.0.1:8787'
-  : 'https://show-plan-event-backend.liucheng-show-plan.workers.dev'
+  : 'https://ensemble-guest-api.saintmob.workers.dev'
 const DEV_EVENT_API_BASES = ['http://127.0.0.1:8787', 'http://127.0.0.1:8788']
 const EXPLICIT_EVENT_API_BASE = normalizeBase(import.meta.env.VITE_EVENT_API_BASE)
 const CONFIGURED_EVENT_API_BASE = EXPLICIT_EVENT_API_BASE || DEFAULT_EVENT_API_BASE
