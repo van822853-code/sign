@@ -2,6 +2,20 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function getShanghaiDayKey(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
+function toPositiveInteger(value, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback
+}
+
 function safeJsonParse(value, fallback = {}) {
   if (typeof value !== 'string' || !value.trim()) {
     return fallback
@@ -12,6 +26,17 @@ function safeJsonParse(value, fallback = {}) {
   } catch {
     return fallback
   }
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(String(value || '')),
+  )
+
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 export function guestRowToResponse(row) {
@@ -269,4 +294,40 @@ export async function deleteUploadRecord(env, uploadId) {
     status: 'deleted',
     deletedAt: nowIso(),
   })
+}
+
+export async function bumpDeviceDailyLimit(env, { deviceId, limit }) {
+  const timestamp = nowIso()
+  const dayKey = getShanghaiDayKey()
+  const deviceHash = await sha256Hex(deviceId)
+
+  await env.DB.prepare(
+    `INSERT INTO checkin_device_daily_limits (
+      device_hash,
+      day_key,
+      count,
+      created_at,
+      updated_at
+    ) VALUES (?1, ?2, 1, ?3, ?3)
+    ON CONFLICT(device_hash, day_key) DO UPDATE SET
+      count = checkin_device_daily_limits.count + 1,
+      updated_at = excluded.updated_at`,
+  )
+    .bind(deviceHash, dayKey, timestamp)
+    .run()
+
+  const row = await env.DB.prepare(
+    'SELECT device_hash, day_key, count, created_at, updated_at FROM checkin_device_daily_limits WHERE device_hash = ?1 AND day_key = ?2 LIMIT 1',
+  )
+    .bind(deviceHash, dayKey)
+    .first()
+
+  const count = toPositiveInteger(row?.count, 0)
+  return {
+    deviceHash,
+    dayKey: String(row?.day_key || dayKey),
+    count,
+    limit,
+    allowed: count <= limit,
+  }
 }

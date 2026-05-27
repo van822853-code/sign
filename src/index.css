@@ -624,13 +624,32 @@ button {
 .members-action {
   position: relative;
   z-index: 3;
-  display: grid;
-  justify-items: center;
+  display: flex;
+  width: min(100%, 580px);
+  margin: 0 auto;
+  align-items: stretch;
+  gap: 12px;
   padding: 20px 0 6px;
 }
 
 .members-action .primary-action {
-  min-width: min(100%, 280px);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.refresh-action {
+  display: inline-grid;
+  width: 54px;
+  min-width: 54px;
+  padding: 0;
+  place-items: center;
+}
+
+.refresh-action svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  filter: drop-shadow(0 0 8px rgba(122, 245, 255, 0.42));
 }
 
 .event-overview {

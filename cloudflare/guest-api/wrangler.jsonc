@@ -10,7 +10,7 @@
     "R2_PUBLIC_BASE_URL": "https://pub-bd75abd3fa3d4c49899e4c68dcb7d218.r2.dev",
     "R2_KEY_PREFIX": "prod/guests",
     "R2_PRESIGN_EXPIRES_SECONDS": "900",
-    "MAX_UPLOAD_BYTES": "10485760"
+    "MAX_UPLOAD_BYTES": "5242880"
   },
   "d1_databases": [
     {

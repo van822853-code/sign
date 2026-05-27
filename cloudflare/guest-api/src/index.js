@@ -1,10 +1,10 @@
 import {
+  bumpDeviceDailyLimit,
   completeUploadRecord,
   createGuest,
   createUploadRecord,
   deleteUploadRecord,
   getActiveContentItem,
-  getUploadById,
   listContentItems,
   listGuests,
   uploadRowToResponse,
@@ -12,7 +12,6 @@ import {
 import {
   buildObjectKey,
   buildPublicUrl,
-  createSignedUploadUrl,
   deleteObjectFromR2,
   resolveR2Config,
   verifyObjectExists,
@@ -29,16 +28,13 @@ import {
   trimString,
 } from './http.js'
 
-function normalizePrefix(prefix) {
-  return String(prefix || '')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '')
-}
-
 function readPositiveInteger(value, fallback) {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
+
+const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+const CHECKIN_DEVICE_DAILY_LIMIT = 100
 
 function ensureImageContentType(contentType) {
   const normalized = toLowerTrim(contentType)
@@ -117,7 +113,7 @@ async function prepareUploadRecord(env, {
   externalUserId,
   metadata,
 }) {
-  const maxUploadBytes = readPositiveInteger(env.MAX_UPLOAD_BYTES, 10 * 1024 * 1024)
+  const maxUploadBytes = readPositiveInteger(env.MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES)
   if (sizeBytes > maxUploadBytes) {
     throw new HttpError(413, 'size_too_large')
   }
@@ -163,26 +159,6 @@ async function prepareUploadRecord(env, {
   }
 }
 
-function buildBaseUploadPayload(record, uploadUrl) {
-  return {
-    uploadId: record.uploadId,
-    key: record.objectKey,
-    objectKey: record.objectKey,
-    uploadURL: uploadUrl,
-    uploadUrl,
-    publicUrl: record.publicUrl,
-    publicURL: record.publicUrl,
-    url: record.publicUrl,
-    purpose: record.purpose,
-    filename: record.filename,
-    contentType: record.contentType,
-    sizeBytes: record.sizeBytes,
-    metadata: record.metadata,
-    externalUserId: record.externalUserId || '',
-    expiresAt: record.expiresAt,
-  }
-}
-
 function buildUploadResponse(upload, extra = {}) {
   const normalized = uploadRowToResponse(upload)
   return {
@@ -199,179 +175,169 @@ function buildUploadResponse(upload, extra = {}) {
   }
 }
 
-async function handleUploadsInit(env, request) {
-  const body = await readJsonBody(request)
-  const filename = trimString(body.fileName || body.filename || body.name)
-  const contentType = ensureImageContentType(body.contentType || body.mimeType)
-  const sizeBytes = readPositiveInteger(body.sizeBytes || body.size || body.fileSize, 0)
-  const purpose = trimString(body.purpose) || 'guest-avatar'
-  const externalUserId = trimString(body.externalUserId || body.userId)
-  const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
-
-  if (!filename) {
-    throw new HttpError(400, 'invalid_filename')
-  }
-
-  if (!sizeBytes) {
-    throw new HttpError(400, 'invalid_size')
-  }
-
-  const { record, publicUrl, expiresAt } = await prepareUploadRecord(env, {
-    filename,
-    contentType,
-    sizeBytes,
-    purpose,
-    externalUserId,
-    metadata,
-  })
-
-  const uploadUrl = await createSignedUploadUrl(env, {
-    objectKey: record.objectKey,
-    contentType,
-  })
-
-  const payload = buildBaseUploadPayload(
-    {
-      ...record,
-      publicUrl,
-      expiresAt,
-    },
-    uploadUrl,
+function readRequestClientIp(request) {
+  const xForwardedFor = trimString(request.headers.get('x-forwarded-for'))
+  const forwardedIp = xForwardedFor ? xForwardedFor.split(',')[0].trim() : ''
+  return (
+    trimString(request.headers.get('cf-connecting-ip')) ||
+    forwardedIp ||
+    trimString(request.headers.get('x-real-ip')) ||
+    'unknown'
   )
-
-  return jsonResponse({ upload: payload, ...payload })
 }
 
-async function handleUploadsProxy(env, request) {
-  const formData = await request.formData().catch(() => {
-    throw new HttpError(400, 'invalid_form_data')
+function readRequestUserAgent(request) {
+  return trimString(request.headers.get('user-agent'))
+}
+
+function readCheckInDeviceId(request) {
+  const clientIp = readRequestClientIp(request)
+  const userAgent = readRequestUserAgent(request)
+  return (
+    trimString(request.headers.get('x-checkin-device-id')) ||
+    trimString(request.headers.get('x-device-id')) ||
+    `${clientIp}|${userAgent}`
+  )
+}
+
+async function enforceCheckInDeviceDailyLimit(env, request) {
+  const deviceId = readCheckInDeviceId(request)
+  const result = await bumpDeviceDailyLimit(env, {
+    deviceId,
+    limit: CHECKIN_DEVICE_DAILY_LIMIT,
   })
 
-  const {
-    file,
-    filename,
-    contentType,
-    sizeBytes,
-    purpose,
-    externalUserId,
-    metadata,
-  } = readUploadInputFromForm(formData)
+  if (!result.allowed) {
+    throw new HttpError(429, '这台设备今天已达到 100 次提交上限，请明天再试。')
+  }
 
-  const { record } = await prepareUploadRecord(env, {
-    filename,
-    contentType,
-    sizeBytes,
-    purpose,
-    externalUserId,
-    metadata,
-  })
+  return result
+}
 
-  try {
-    await uploadObjectToR2(env, {
-      objectKey: record.objectKey,
-      contentType,
-      body: file,
+async function handleGuestCreate(env, request) {
+  const contentType = toLowerTrim(request.headers.get('content-type'))
+  let name = ''
+  let role = ''
+  let photo = ''
+  let uploadPayload = null
+
+  if (contentType.startsWith('multipart/form-data')) {
+    const formData = await request.formData().catch(() => {
+      throw new HttpError(400, 'invalid_form_data')
     })
 
-    const verification = await verifyObjectExists(env, {
-      objectKey: record.objectKey,
-      contentType,
-    })
+    name = trimString(formData.get('name') || formData.get('fullName') || formData.get('nickname'))
+    role = trimString(formData.get('role') || formData.get('identity'))
 
-    const completed = await completeUploadRecord(env, record.uploadId)
-    const payload = buildUploadResponse(completed, {
-      photo: completed.publicUrl,
-      publicUrl: completed.publicUrl,
-      publicURL: completed.publicUrl,
-      url: completed.publicUrl,
-      photoUrl: completed.publicUrl,
-      r2SizeBytes: verification.sizeBytes,
-      etag: verification.etag,
-    })
+    if (!name) {
+      throw new HttpError(400, '请输入姓名或昵称')
+    }
 
-    return jsonResponse({ upload: payload, ...payload })
-  } catch (error) {
-    try {
-      await deleteObjectFromR2(env, {
-        objectKey: record.objectKey,
-        contentType,
+    if (!role) {
+      throw new HttpError(400, '请选择身份')
+    }
+
+    const file = formData.get('file')
+    if (file instanceof File) {
+      const {
+        filename,
+        contentType: fileContentType,
+        sizeBytes,
+        purpose,
+        externalUserId,
+        metadata,
+      } = readUploadInputFromForm(formData)
+
+      const { record } = await prepareUploadRecord(env, {
+        filename,
+        contentType: fileContentType,
+        sizeBytes,
+        purpose,
+        externalUserId,
+        metadata,
       })
-    } catch {
-      // Best-effort cleanup only.
+
+      try {
+        await uploadObjectToR2(env, {
+          objectKey: record.objectKey,
+          contentType: fileContentType,
+          body: file,
+        })
+
+        const verification = await verifyObjectExists(env, {
+          objectKey: record.objectKey,
+          contentType: fileContentType,
+        })
+
+        const completed = await completeUploadRecord(env, record.uploadId)
+        photo = completed.publicUrl
+        uploadPayload = buildUploadResponse(completed, {
+          photo: completed.publicUrl,
+          publicUrl: completed.publicUrl,
+          publicURL: completed.publicUrl,
+          url: completed.publicUrl,
+          photoUrl: completed.publicUrl,
+          r2SizeBytes: verification.sizeBytes,
+          etag: verification.etag,
+        })
+      } catch (error) {
+        try {
+          await deleteObjectFromR2(env, {
+            objectKey: record.objectKey,
+            contentType: fileContentType,
+          })
+        } catch {
+          // Best-effort cleanup only.
+        }
+
+        try {
+          await deleteUploadRecord(env, record.uploadId)
+        } catch {
+          // Best-effort cleanup only.
+        }
+
+        throw error
+      }
     }
 
-    try {
-      await deleteUploadRecord(env, record.uploadId)
-    } catch {
-      // Best-effort cleanup only.
+    if (!photo) {
+      photo = trimString(formData.get('photo') || formData.get('photoUrl') || formData.get('publicUrl') || formData.get('url'))
     }
-
-    throw error
-  }
-}
-
-async function handleUploadsComplete(env, request) {
-  const body = await readJsonBody(request)
-  const uploadId = trimString(body.uploadId || body.key || body.imageId || body.id)
-
-  if (!uploadId) {
-    throw new HttpError(400, 'invalid_upload_id')
+  } else {
+    const body = await readJsonBody(request)
+    name = trimString(body.name || body.fullName || body.nickname)
+    role = trimString(body.role || body.identity)
+    photo = trimString(body.photo || body.photoUrl || body.publicUrl || body.url)
   }
 
-  const record = await getUploadById(env, uploadId)
-  if (!record) {
-    throw new HttpError(404, 'upload_not_found')
+  if (!name) {
+    throw new HttpError(400, '请输入姓名或昵称')
   }
 
-  if (record.status === 'deleted') {
-    throw new HttpError(409, 'deleted')
+  if (!role) {
+    throw new HttpError(400, '请选择身份')
   }
 
-  const verification = await verifyObjectExists(env, {
-    objectKey: record.objectKey,
-    contentType: record.contentType,
+  if (!photo) {
+    throw new HttpError(400, '请先上传头像')
+  }
+
+  await enforceCheckInDeviceDailyLimit(env, request)
+
+  const guest = await createGuest(env, {
+    name,
+    role,
+    photo,
   })
 
-  const completed = await completeUploadRecord(env, uploadId)
-  const payload = buildUploadResponse(completed, {
-    photo: completed.publicUrl,
-    publicUrl: completed.publicUrl,
-    publicURL: completed.publicUrl,
-    url: completed.publicUrl,
-    photoUrl: completed.publicUrl,
-    r2SizeBytes: verification.sizeBytes,
-    etag: verification.etag,
-  })
-
-  return jsonResponse({ upload: payload, ...payload })
-}
-
-async function handleUploadsDelete(env, uploadId) {
-  const record = await getUploadById(env, uploadId)
-  if (!record) {
-    throw new HttpError(404, 'upload_not_found')
-  }
-
-  const prefix = normalizePrefix(env.R2_KEY_PREFIX || 'prod/guests')
-  if (prefix && !record.objectKey.startsWith(`${prefix}/`)) {
-    throw new HttpError(403, 'forbidden_key')
-  }
-
-  await deleteObjectFromR2(env, {
-    objectKey: record.objectKey,
-    contentType: record.contentType,
-  })
-
-  const deleted = await deleteUploadRecord(env, uploadId)
-  const payload = buildUploadResponse(deleted, {
-    photo: deleted.publicUrl,
-    publicUrl: deleted.publicUrl,
-    publicURL: deleted.publicUrl,
-    url: deleted.publicUrl,
-    photoUrl: deleted.publicUrl,
-  })
-
-  return jsonResponse({ upload: payload, ...payload })
+  return jsonResponse(
+    {
+      guest,
+      guests: [guest],
+      ...(uploadPayload ? { upload: uploadPayload } : {}),
+    },
+    { status: 201 },
+  )
 }
 
 async function handleContentGet(env, section) {
@@ -391,6 +357,22 @@ async function handleContentGet(env, section) {
   }
 
   throw new HttpError(404, 'not_found')
+}
+
+async function handleBootstrap(env) {
+  const [poster, program, works, guests] = await Promise.all([
+    getActiveContentItem(env, 'poster'),
+    getActiveContentItem(env, 'program'),
+    listContentItems(env, 'work'),
+    listGuests(env),
+  ])
+
+  return jsonResponse({
+    poster,
+    program,
+    works,
+    guests,
+  })
 }
 
 export default {
@@ -419,39 +401,16 @@ export default {
         return await handleContentGet(env, 'works')
       }
 
+      if (request.method === 'GET' && pathname === '/api/bootstrap') {
+        return await handleBootstrap(env)
+      }
+
       if (request.method === 'GET' && pathname === '/api/guests') {
         return jsonResponse({ guests: await listGuests(env) })
       }
 
       if (request.method === 'POST' && pathname === '/api/guests') {
-        const body = await readJsonBody(request)
-        const guest = await createGuest(env, body)
-        return jsonResponse({ guest, guests: [guest] }, { status: 201 })
-      }
-
-      if (request.method === 'POST' && pathname === '/api/uploads/init') {
-        return await handleUploadsInit(env, request)
-      }
-
-      if (request.method === 'POST' && pathname === '/api/uploads/complete') {
-        return await handleUploadsComplete(env, request)
-      }
-
-      if (request.method === 'POST' && pathname === '/api/uploads/proxy') {
-        return await handleUploadsProxy(env, request)
-      }
-
-      const uploadMatch = pathname.match(/^\/api\/uploads\/([^/]+)$/)
-      if (uploadMatch && request.method === 'GET') {
-        const upload = await getUploadById(env, uploadMatch[1])
-        if (!upload) {
-          throw new HttpError(404, 'upload_not_found')
-        }
-        return jsonResponse({ upload, ...upload })
-      }
-
-      if (uploadMatch && request.method === 'DELETE') {
-        return await handleUploadsDelete(env, uploadMatch[1])
+        return await handleGuestCreate(env, request)
       }
 
       throw new HttpError(404, 'not_found')

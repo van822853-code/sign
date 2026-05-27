@@ -2,11 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './index.css'
 import {
   createGuest,
-  fetchActivePoster,
-  fetchGuests,
-  fetchProgram,
-  fetchWorks,
-  uploadGuestAvatar,
+  fetchEventBootstrap,
 } from './lib/api'
 import {
   clearCheckInDraft,
@@ -18,6 +14,7 @@ import {
 const identityOptions = ['老师', '本课程同学', '其他学生', '其他观众']
 const storageKey = 'show-plan-event-guests-cache'
 const stepLabels = ['姓名', '头像', '身份', '确认']
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
 function getIdentityTone(identity) {
   const toneMap = {
@@ -159,6 +156,14 @@ function SignalPills() {
   )
 }
 
+function RefreshIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M6 12a6 6 0 0 1 10.2-4.2L18 6v5h-5l1.8-1.8A4 4 0 1 0 16 14h2.1A6 6 0 1 1 6 12Z" />
+    </svg>
+  )
+}
+
 function Avatar({ entry, className = '' }) {
   const [failedPhoto, setFailedPhoto] = useState('')
   const initial = (entry.name || entry.fullName || '?').trim().slice(0, 1).toUpperCase()
@@ -252,7 +257,7 @@ function EventOverview({ poster, program, works }) {
   )
 }
 
-function EntrancePage({ entries, onEnter, poster, program, works }) {
+function EntrancePage({ entries, onEnter, onRefresh, poster, program, syncMessage, works }) {
   return (
     <main className="screen entrance-screen members-screen">
       <AmbientStage />
@@ -266,10 +271,20 @@ function EntrancePage({ entries, onEnter, poster, program, works }) {
         <EventOverview poster={poster} program={program} works={works} />
         <FloatingMembers entries={entries} />
         <div className="members-action">
+          <button
+            className="ghost-action refresh-action"
+            title="手动刷新"
+            type="button"
+            onClick={onRefresh}
+          >
+            <RefreshIcon />
+            <span className="sr-only">手动刷新</span>
+          </button>
           <button className="primary-action" type="button" onClick={onEnter}>
             开始登记
           </button>
         </div>
+        <p className="camera-note">当前状态：{syncMessage === 'synced' ? '已同步' : syncMessage === 'syncing' ? '同步中' : '离线缓存'}</p>
       </section>
     </main>
   )
@@ -596,6 +611,21 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
   }
 
   function commitAvatarFile(file) {
+    if (file && file.size > MAX_AVATAR_BYTES) {
+      if (avatarPreviewUrlRef.current) {
+        URL.revokeObjectURL(avatarPreviewUrlRef.current)
+        avatarPreviewUrlRef.current = ''
+      }
+
+      setAvatarFile(null)
+      setAvatarPreviewUrl('')
+      setErrors((current) => ({
+        ...current,
+        avatarFile: '头像图片不能超过 5MB，请重新拍摄或压缩后再试。',
+      }))
+      return
+    }
+
     if (avatarPreviewUrlRef.current) {
       URL.revokeObjectURL(avatarPreviewUrlRef.current)
     }
@@ -624,6 +654,8 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
     if (step === 1) {
       if (!avatarFile) {
         nextErrors.avatarFile = '请先拍摄头像或选择头像'
+      } else if (avatarFile.size > MAX_AVATAR_BYTES) {
+        nextErrors.avatarFile = '头像图片不能超过 5MB，请重新拍摄或压缩后再试。'
       }
     }
 
@@ -739,6 +771,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                   onRetake={clearAvatarFile}
                   previewUrl={avatarPreviewUrl}
                 />
+                <p className="join-caption">头像图片不超过 5MB，拍摄后会自动压缩后提交。</p>
                 {errors.avatarFile && <em>{errors.avatarFile}</em>}
               </div>
               <div className="step-actions">
@@ -795,7 +828,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
                 <strong>{formData.fullName || '未填写姓名'}</strong>
                 <p>{formData.identity || '身份未选择'}</p>
                 <p className="join-caption">
-                  提交后会保存你的姓名、身份和头像
+                  提交后会保存你的姓名、身份和头像。每台设备每天最多 100 次提交。
                 </p>
               </div>
               {submitError && <p className="submit-error">{submitError}</p>}
@@ -880,20 +913,32 @@ function App() {
   const [program, setProgram] = useState(null)
   const [works, setWorks] = useState([])
   const [syncMessage, setSyncMessage] = useState('syncing')
+  const [bootstrapRefreshTick, setBootstrapRefreshTick] = useState(0)
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const handleManualRefresh = useCallback(() => {
+    setSyncMessage('syncing')
+    setBootstrapRefreshTick((current) => current + 1)
+  }, [])
+
   useEffect(() => {
+    if (step !== 'entrance') {
+      return undefined
+    }
+
     let ignore = false
+    let timer = 0
+    let backoff = 60000
 
     async function loadRemoteData() {
+      if (ignore || document.visibilityState !== 'visible') {
+        return
+      }
+
       try {
-        const [remotePoster, remoteProgram, remoteWorks, remoteGuests] = await Promise.all([
-          fetchActivePoster(),
-          fetchProgram(),
-          fetchWorks(),
-          fetchGuests(),
-        ])
+        const { poster: remotePoster, program: remoteProgram, works: remoteWorks, guests: remoteGuests } =
+          await fetchEventBootstrap()
 
         if (ignore) {
           return
@@ -906,32 +951,48 @@ function App() {
         setWorks(remoteWorks)
         setEntries(normalizedGuests)
         setSyncMessage('synced')
+        backoff = 60000
       } catch (error) {
         console.warn('Unable to load event data', error)
         if (!ignore) {
           setSyncMessage('offline')
+          backoff = 5 * 60 * 1000
+        }
+      } finally {
+        if (!ignore && step === 'entrance' && document.visibilityState === 'visible') {
+          window.clearTimeout(timer)
+          timer = window.setTimeout(loadRemoteData, backoff)
         }
       }
     }
 
     loadRemoteData()
-    const interval = window.setInterval(loadRemoteData, 15000)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadRemoteData()
+      } else {
+        window.clearTimeout(timer)
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       ignore = true
-      window.clearInterval(interval)
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [])
+  }, [bootstrapRefreshTick, step])
 
   async function handleSubmit(entry) {
     setSubmitting(true)
     setSubmitError('')
 
     try {
-      const uploadedSelfieUrl = await uploadGuestAvatar(entry.photo)
       const guestPayload = {
         name: entry.name,
         role: entry.role,
-        photo: uploadedSelfieUrl,
+        photo: entry.photo,
       }
       const savedEntry = normalizeGuest({ ...guestPayload, ...(await createGuest(guestPayload)) })
       await clearCheckInDraft()
@@ -959,8 +1020,10 @@ function App() {
             <EntrancePage
               entries={entries}
               onEnter={() => setStep('form')}
+              onRefresh={handleManualRefresh}
               poster={poster}
               program={program}
+              syncMessage={syncMessage}
               works={works}
             />
           )}

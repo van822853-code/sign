@@ -63,13 +63,9 @@
 - `GET /api/posters/active`
 - `GET /api/program`
 - `GET /api/works`
+- `GET /api/bootstrap`
 - `GET /api/guests`
 - `POST /api/guests`
-- `POST /api/uploads/proxy`
-- `POST /api/uploads/init`
-- `POST /api/uploads/complete`
-- `GET /api/uploads/:uploadId`
-- `DELETE /api/uploads/:uploadId`
 
 ## 前端配置
 
@@ -81,4 +77,23 @@
 生产环境默认已指向 `https://ensemble-guest-api.saintmob.workers.dev`，如需切换再覆盖此变量。
 
 当前前端上传流程由 Worker 代传文件，浏览器不再直接请求 R2 直连域名。
-`/api/uploads/init` 和 `/api/uploads/complete` 仍保留为兼容接口，但前端主流程使用 `/api/uploads/proxy`。
+前端主流程直接调用 `POST /api/guests`，并由 Worker 在同一次请求里完成头像上传和来宾写入。
+前端入口优先调用 `GET /api/bootstrap` 汇总海报、节目、作品和来宾，避免轮询 4 个单独接口。
+
+## 访问控制
+
+公开登记链路现在很简单：
+
+- `POST /api/guests` 由前端自动带设备标识，Worker 按“每台设备每天 100 次”计数
+- 同一请求既可以是 JSON，也可以是 `multipart/form-data`
+- 传文件时，Worker 会在写入来宾前先把头像上传到 R2
+
+## 上传限制
+
+- 头像文件上限：5MB
+- 超出会在前端先拦截，Worker 侧也会再次校验
+
+## 提交限制
+
+- 每台设备每天最多 100 次提交
+- 设备标识由前端自动生成并保存在本地
