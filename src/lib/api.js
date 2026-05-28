@@ -28,7 +28,7 @@ function getApiBaseCandidates(base) {
   return []
 }
 
-async function fetchFromCandidateBases(path, options, bases) {
+async function fetchFromCandidateBases(path, options, bases, fetchOptions = {}) {
   if (bases.length === 0) {
     throw new Error('未配置 Worker API 地址')
   }
@@ -37,7 +37,14 @@ async function fetchFromCandidateBases(path, options, bases) {
 
   for (const base of bases) {
     try {
-      const response = await fetch(buildApiUrl(base, path), options)
+      const response = await fetch(buildApiUrl(base, path), {
+        ...(options || {}),
+        ...fetchOptions,
+        headers: {
+          ...((options && options.headers) || {}),
+          ...((fetchOptions && fetchOptions.headers) || {}),
+        },
+      })
       return response
     } catch (error) {
       lastError = error
@@ -55,11 +62,12 @@ async function parseResponse(response) {
   return data
 }
 
-async function request(path, options) {
+async function request(path, options, fetchOptions = {}) {
   const response = await fetchFromCandidateBases(
     path,
     options,
     getApiBaseCandidates(CONFIGURED_EVENT_API_BASE),
+    fetchOptions,
   )
   return parseResponse(response)
 }
@@ -111,33 +119,22 @@ function withCheckInDeviceId(headers = {}, deviceId) {
   }
 }
 
-export async function fetchActivePoster() {
-  const data = await request('/api/posters/active')
-  return data?.poster ?? null
-}
-
-export async function fetchProgram() {
-  const data = await request('/api/program')
-  return data?.program ?? null
-}
-
-export async function fetchWorks() {
-  const data = await request('/api/works')
-  return data?.works ?? []
-}
-
-export async function fetchGuests() {
-  const data = await request('/api/guests')
-  return data?.guests ?? []
-}
-
-export async function fetchEventBootstrap() {
-  const data = await request('/api/bootstrap')
+export async function fetchEventBootstrap({ cacheMode = 'default', guestLimit, signal } = {}) {
+  const params = new URLSearchParams()
+  if (Number.isInteger(guestLimit) && guestLimit > 0) {
+    params.set('guestLimit', String(guestLimit))
+  }
+  const query = params.toString()
+  const data = await request(`/api/bootstrap${query ? `?${query}` : ''}`, undefined, {
+    cache: cacheMode,
+    signal,
+  })
   return {
     poster: data?.poster ?? null,
     program: data?.program ?? null,
     works: data?.works ?? [],
     guests: data?.guests ?? [],
+    guestCount: Number(data?.guestCount ?? data?.totalGuests ?? data?.guests?.length ?? 0),
   }
 }
 

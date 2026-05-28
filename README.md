@@ -25,7 +25,8 @@ Worker 后端在：
 
 本地开发时可以指向 `http://127.0.0.1:8787`。生产环境默认已经硬编码指向 `https://ensemble-guest-api.saintmob.workers.dev`，如需改到别的 Worker，再用这个变量覆盖。
 
-当前上传流程和活动 API 走同一个 Worker，不再需要单独的上传 base。页面入口会优先调用 `GET /api/bootstrap` 一次性拉取海报、节目、作品和来宾，避免分别请求四个接口。
+当前上传流程和活动 API 走同一个 Worker，不再需要单独的上传 base。页面入口会优先调用 `GET /api/bootstrap?guestLimit=28` 一次性拉取海报、节目、作品、最新来宾和来宾总数，避免分别请求四个接口，也避免首屏拉取全量历史来宾。
+入口页不再做固定间隔轮询，只在首次进入、手动刷新、或者切回前台且数据足够旧时重新拉取。
 
 ## Guest payload
 
@@ -42,7 +43,7 @@ Worker 后端在：
 - 传 JSON 时：提交 `name`、`role`、`photo`（已上传头像 URL）
 - 传 `multipart/form-data` 时：直接提交 `name`、`role`、`file`，Worker 会负责上传头像并创建来宾
 
-`POST /api/guests` 仍然会返回 `guest`，来宾头像状态通过 `GET /api/guests` 获取并渲染，最终显示返回的 `photo` 字段。
+`POST /api/guests` 仍然会返回 `guest`。来宾列表读取接口支持 `limit`，例如 `GET /api/guests?limit=28` 返回最新来宾和 `guestCount`/`totalGuests`，最终头像显示使用返回的 `photo` 字段。
 
 头像文件上限为 5MB，超出会在前端和 Worker 双侧一起拦截。
 每台设备每天最多 100 次提交，前端会自动带上本地生成的设备标识。

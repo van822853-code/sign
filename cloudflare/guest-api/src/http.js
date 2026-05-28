@@ -38,6 +38,19 @@ export function optionsResponse() {
   return new Response(null, { status: 204, headers: corsHeaders })
 }
 
+export function cacheControlHeader({
+  maxAgeSeconds = 0,
+  staleWhileRevalidateSeconds = 0,
+} = {}) {
+  const directives = ['public', `max-age=${Math.max(0, Math.floor(maxAgeSeconds))}`]
+
+  if (staleWhileRevalidateSeconds > 0) {
+    directives.push(`stale-while-revalidate=${Math.max(0, Math.floor(staleWhileRevalidateSeconds))}`)
+  }
+
+  return directives.join(', ')
+}
+
 export async function readJsonBody(request) {
   const raw = await request.text()
   if (!raw.trim()) {
