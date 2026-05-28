@@ -173,6 +173,22 @@ button {
   animation-delay: var(--delay);
 }
 
+.ambient-stage-compact .signal-dust,
+.ambient-stage-compact .wave-b,
+.ambient-stage-compact .grid-noise {
+  display: none;
+}
+
+.ambient-stage-compact .constellation-map {
+  opacity: 0.5;
+  filter: none;
+}
+
+.ambient-stage-compact .deep-field {
+  opacity: 0.36;
+  animation-duration: 36s;
+}
+
 .wave {
   position: absolute;
   left: 50%;
@@ -279,6 +295,10 @@ button {
   transform: rotate(var(--r));
   animation: shardDrift 8.5s ease-in-out infinite alternate;
   animation-delay: var(--delay);
+}
+
+.ambient-stage-compact .particle {
+  box-shadow: none;
 }
 
 .grid-noise {
@@ -1635,6 +1655,29 @@ button {
 
 }
 
+@media (max-width: 720px) {
+  .signal-dust,
+  .wave-b,
+  .grid-noise,
+  .shard {
+    display: none;
+  }
+
+  .constellation-map {
+    opacity: 0.48;
+    filter: none;
+  }
+
+  .deep-field {
+    opacity: 0.38;
+    animation-duration: 36s;
+  }
+
+  .particle {
+    box-shadow: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1643,5 +1686,18 @@ button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .signal-dust,
+  .wave,
+  .grid-noise,
+  .particle,
+  .shard {
+    display: none;
+  }
+
+  .constellation-map {
+    opacity: 0.32;
+    filter: none;
   }
 }

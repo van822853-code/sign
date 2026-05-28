@@ -1,6 +1,7 @@
 import {
   bumpDeviceDailyLimit,
   completeUploadRecord,
+  countGuests,
   createGuest,
   createUploadRecord,
   deleteUploadRecord,
@@ -18,6 +19,7 @@ import {
   uploadObjectToR2,
 } from './r2.js'
 import {
+  cacheControlHeader,
   HttpError,
   jsonResponse,
   optionsResponse,
@@ -33,8 +35,14 @@ function readPositiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function readBoundedInteger(value, fallback, max) {
+  return Math.min(readPositiveInteger(value, fallback), max)
+}
+
 const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 const CHECKIN_DEVICE_DAILY_LIMIT = 100
+const DEFAULT_BOOTSTRAP_GUEST_LIMIT = 28
+const MAX_GUEST_LIST_LIMIT = 200
 
 function ensureImageContentType(contentType) {
   const normalized = toLowerTrim(contentType)
@@ -216,8 +224,8 @@ async function enforceCheckInDeviceDailyLimit(env, request) {
 
 async function handleGuestCreate(env, request) {
   const contentType = toLowerTrim(request.headers.get('content-type'))
-  let name = ''
-  let role = ''
+  let name
+  let role
   let photo = ''
   let uploadPayload = null
 
@@ -343,36 +351,72 @@ async function handleGuestCreate(env, request) {
 async function handleContentGet(env, section) {
   if (section === 'poster') {
     const poster = await getActiveContentItem(env, section)
-    return jsonResponse({ poster })
+    return jsonResponse(
+      { poster },
+      {
+        headers: {
+          'Cache-Control': cacheControlHeader({ maxAgeSeconds: 300, staleWhileRevalidateSeconds: 900 }),
+        },
+      },
+    )
   }
 
   if (section === 'program') {
     const program = await getActiveContentItem(env, section)
-    return jsonResponse({ program })
+    return jsonResponse(
+      { program },
+      {
+        headers: {
+          'Cache-Control': cacheControlHeader({ maxAgeSeconds: 300, staleWhileRevalidateSeconds: 900 }),
+        },
+      },
+    )
   }
 
   if (section === 'works') {
     const works = await listContentItems(env, 'work')
-    return jsonResponse({ works })
+    return jsonResponse(
+      { works },
+      {
+        headers: {
+          'Cache-Control': cacheControlHeader({ maxAgeSeconds: 300, staleWhileRevalidateSeconds: 900 }),
+        },
+      },
+    )
   }
 
   throw new HttpError(404, 'not_found')
 }
 
-async function handleBootstrap(env) {
-  const [poster, program, works, guests] = await Promise.all([
+async function handleBootstrap(env, url) {
+  const guestLimit = readBoundedInteger(
+    url.searchParams.get('guestLimit') || url.searchParams.get('limit'),
+    DEFAULT_BOOTSTRAP_GUEST_LIMIT,
+    MAX_GUEST_LIST_LIMIT,
+  )
+  const [poster, program, works, guests, guestCount] = await Promise.all([
     getActiveContentItem(env, 'poster'),
     getActiveContentItem(env, 'program'),
     listContentItems(env, 'work'),
-    listGuests(env),
+    listGuests(env, { limit: guestLimit }),
+    countGuests(env),
   ])
 
-  return jsonResponse({
-    poster,
-    program,
-    works,
-    guests,
-  })
+  return jsonResponse(
+    {
+      poster,
+      program,
+      works,
+      guests,
+      guestCount,
+      totalGuests: guestCount,
+    },
+    {
+      headers: {
+        'Cache-Control': cacheControlHeader({ maxAgeSeconds: 30, staleWhileRevalidateSeconds: 300 }),
+      },
+    },
+  )
 }
 
 export default {
@@ -402,11 +446,27 @@ export default {
       }
 
       if (request.method === 'GET' && pathname === '/api/bootstrap') {
-        return await handleBootstrap(env)
+        return await handleBootstrap(env, url)
       }
 
       if (request.method === 'GET' && pathname === '/api/guests') {
-        return jsonResponse({ guests: await listGuests(env) })
+        const limit = readBoundedInteger(
+          url.searchParams.get('limit'),
+          MAX_GUEST_LIST_LIMIT,
+          MAX_GUEST_LIST_LIMIT,
+        )
+        const [guests, guestCount] = await Promise.all([
+          listGuests(env, { limit }),
+          countGuests(env),
+        ])
+        return jsonResponse(
+          { guests, guestCount, totalGuests: guestCount },
+          {
+            headers: {
+              'Cache-Control': 'no-store',
+            },
+          },
+        )
       }
 
       if (request.method === 'POST' && pathname === '/api/guests') {

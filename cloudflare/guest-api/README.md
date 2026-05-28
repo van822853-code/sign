@@ -63,8 +63,8 @@
 - `GET /api/posters/active`
 - `GET /api/program`
 - `GET /api/works`
-- `GET /api/bootstrap`
-- `GET /api/guests`
+- `GET /api/bootstrap?guestLimit=28`
+- `GET /api/guests?limit=28`
 - `POST /api/guests`
 
 ## 前端配置
@@ -78,7 +78,10 @@
 
 当前前端上传流程由 Worker 代传文件，浏览器不再直接请求 R2 直连域名。
 前端主流程直接调用 `POST /api/guests`，并由 Worker 在同一次请求里完成头像上传和来宾写入。
-前端入口优先调用 `GET /api/bootstrap` 汇总海报、节目、作品和来宾，避免轮询 4 个单独接口。
+前端入口优先调用 `GET /api/bootstrap?guestLimit=28` 汇总海报、节目、作品、最新来宾和来宾总数，避免轮询 4 个单独接口，也避免首屏拉取全量历史来宾。
+入口页不再有固定间隔的自动轮询，只在首次加载、手动刷新、或切回前台且数据足够旧时才重新拉取。
+
+`GET /api/bootstrap` 和静态读接口会返回适合浏览器缓存的响应头，以减少重复网络请求；`GET /api/guests` 支持 `limit` 并保持 `no-store`，避免提交后的名单被浏览器缓存住。两个来宾列表响应都会返回 `guestCount`/`totalGuests`，用于前端在只展示最新来宾时仍显示准确总人数。
 
 ## 访问控制
 

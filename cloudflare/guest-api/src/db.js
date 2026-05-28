@@ -132,12 +132,23 @@ export function contentRowToResponse(row) {
   }
 }
 
-export async function listGuests(env) {
+export async function listGuests(env, { limit = 100 } = {}) {
+  const normalizedLimit = Math.min(Math.max(toPositiveInteger(limit, 100), 1), 200)
   const result = await env.DB.prepare(
-    'SELECT id, name, role, photo, request_id, created_at, updated_at FROM guests ORDER BY created_at ASC',
-  ).all()
+    `SELECT id, name, role, photo, request_id, created_at, updated_at
+     FROM guests
+     ORDER BY created_at DESC
+     LIMIT ?1`,
+  )
+    .bind(normalizedLimit)
+    .all()
 
-  return (result.results || []).map((row) => guestRowToResponse(row))
+  return (result.results || []).reverse().map((row) => guestRowToResponse(row))
+}
+
+export async function countGuests(env) {
+  const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM guests').first()
+  return toPositiveInteger(row?.count, 0)
 }
 
 export async function createGuest(env, input) {

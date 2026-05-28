@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import './index.css'
 import {
   createGuest,
@@ -15,6 +15,40 @@ const identityOptions = ['老师', '本课程同学', '其他学生', '其他观
 const storageKey = 'show-plan-event-guests-cache'
 const stepLabels = ['姓名', '头像', '身份', '确认']
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024
+const BOOTSTRAP_STALE_AFTER_MS = 5 * 60 * 1000
+const DISPLAY_GUEST_LIMIT = 28
+const CACHE_GUEST_LIMIT = 40
+const AVATAR_OUTPUT_SIZE = 512
+const AVATAR_OUTPUT_QUALITY = 0.82
+const traceLines = [
+  'M-30 590 L130 510 L250 310 L505 250 L830 350 L980 310',
+  'M40 720 L190 620 L285 705 L382 585 L510 425 L790 520 L930 430',
+  'M120 85 L260 170 L185 300 L330 330 L475 380 L610 535 L735 566 L960 365',
+  'M-20 250 L110 205 L180 160 L255 220 L340 295 L455 110 L555 180 L920 92',
+  'M260 850 L340 710 L505 768 L588 632 L720 415 L850 630 L1000 515',
+]
+const ambientParticles = Array.from({ length: 42 }, (_, index) => ({
+  key: `particle-${index}`,
+  x: `${(index * 47 + 11) % 100}%`,
+  y: `${(index * 61 + 7) % 100}%`,
+  delay: `${(index % 13) * 0.28}s`,
+  size: `${2 + (index % 4)}px`,
+}))
+const ambientShards = Array.from({ length: 10 }, (_, index) => ({
+  key: `shard-${index}`,
+  x: `${(index * 73 + 5) % 100}%`,
+  y: `${(index * 41 + 13) % 100}%`,
+  r: `${(index * 29) % 180}deg`,
+  s: `${0.72 + (index % 5) * 0.13}`,
+  delay: `${(index % 7) * 0.43}s`,
+}))
+const traceNodes = Array.from({ length: 20 }, (_, index) => ({
+  key: `node-${index}`,
+  cx: (index * 89 + 42) % 1000,
+  cy: (index * 137 + 64) % 860,
+  r: (index % 4) + 1.2,
+  delay: `${(index % 8) * 0.31}s`,
+}))
 
 function getIdentityTone(identity) {
   const toneMap = {
@@ -29,7 +63,9 @@ function getIdentityTone(identity) {
 
 function loadEntries() {
   try {
-    return JSON.parse(localStorage.getItem(storageKey) || '[]').map(normalizeGuest)
+    return JSON.parse(localStorage.getItem(storageKey) || '[]')
+      .map(normalizeGuest)
+      .slice(-CACHE_GUEST_LIMIT)
   } catch {
     return []
   }
@@ -84,67 +120,60 @@ function isExpiredInvite() {
   return Number.isFinite(expiresAt) && Date.now() > expiresAt
 }
 
-function AmbientStage() {
-  const traceLines = [
-    'M-30 590 L130 510 L250 310 L505 250 L830 350 L980 310',
-    'M40 720 L190 620 L285 705 L382 585 L510 425 L790 520 L930 430',
-    'M120 85 L260 170 L185 300 L330 330 L475 380 L610 535 L735 566 L960 365',
-    'M-20 250 L110 205 L180 160 L255 220 L340 295 L455 110 L555 180 L920 92',
-    'M260 850 L340 710 L505 768 L588 632 L720 415 L850 630 L1000 515',
-    'M25 430 L160 515 L285 475 L390 610 L520 565 L670 730 L830 690 L985 780',
-    'M690 -40 L625 125 L760 260 L690 390 L610 540 L685 660 L640 860',
-  ]
+const AmbientStage = memo(function AmbientStage({ compact = false }) {
+  const particles = compact ? ambientParticles.slice(0, 16) : ambientParticles
+  const shards = compact ? [] : ambientShards
 
   return (
-    <div className="ambient-stage" aria-hidden="true">
+    <div className={compact ? 'ambient-stage ambient-stage-compact' : 'ambient-stage'} aria-hidden="true">
       <div className="deep-field" />
       <div className="signal-dust" />
       <svg className="constellation-map" viewBox="0 0 1000 860" preserveAspectRatio="none">
         {traceLines.map((line, index) => (
           <path className="trace-line" d={line} key={line} style={{ '--i': index }} />
         ))}
-        {Array.from({ length: 34 }).map((_, index) => (
+        {traceNodes.map((node) => (
           <circle
             className="trace-node"
-            cx={(index * 89 + 42) % 1000}
-            cy={(index * 137 + 64) % 860}
-            key={index}
-            r={(index % 4) + 1.2}
-            style={{ '--delay': `${(index % 8) * 0.31}s` }}
+            cx={node.cx}
+            cy={node.cy}
+            key={node.key}
+            r={node.r}
+            style={{ '--delay': node.delay }}
           />
         ))}
       </svg>
       <div className="wave wave-a" />
       <div className="wave wave-b" />
       <div className="grid-noise" />
-      {Array.from({ length: 86 }).map((_, index) => (
+      {particles.map((particle) => (
         <span
           className="particle"
-          key={index}
+          key={particle.key}
           style={{
-            '--x': `${(index * 47 + 11) % 100}%`,
-            '--y': `${(index * 61 + 7) % 100}%`,
-            '--delay': `${(index % 13) * 0.28}s`,
-            '--size': `${2 + (index % 4)}px`,
+            '--x': particle.x,
+            '--y': particle.y,
+            '--delay': particle.delay,
+            '--size': particle.size,
           }}
         />
       ))}
-      {Array.from({ length: 26 }).map((_, index) => (
+      {shards.map((shard) => (
         <span
           className="shard"
-          key={index}
+          key={shard.key}
           style={{
-            '--x': `${(index * 73 + 5) % 100}%`,
-            '--y': `${(index * 41 + 13) % 100}%`,
-            '--r': `${(index * 29) % 180}deg`,
-            '--s': `${0.72 + (index % 5) * 0.13}`,
-            '--delay': `${(index % 7) * 0.43}s`,
+            '--x': shard.x,
+            '--y': shard.y,
+            '--r': shard.r,
+            '--s': shard.s,
+            '--delay': shard.delay,
           }}
         />
       ))}
     </div>
   )
-}
+})
 
 function SignalPills() {
   return (
@@ -173,6 +202,8 @@ function Avatar({ entry, className = '' }) {
   return entry.photo && !imageFailed ? (
     <img
       className={`avatar-image ${toneClass} ${className}`}
+      decoding="async"
+      loading="lazy"
       onError={() => setFailedPhoto(entry.photo)}
       src={entry.photo}
       alt={entry.name || entry.fullName || '头像'}
@@ -185,7 +216,7 @@ function Avatar({ entry, className = '' }) {
 }
 
 function FloatingMembers({ entries }) {
-  const visibleEntries = entries.slice(-28)
+  const visibleEntries = entries.slice(-DISPLAY_GUEST_LIMIT)
 
   if (visibleEntries.length === 0) {
     return (
@@ -230,7 +261,7 @@ function EventOverview({ poster, program, works }) {
       {posterImage && (
         <article className="info-panel poster-panel">
           <span>活动海报</span>
-          <img alt={getPosterTitle(poster)} src={posterImage} />
+          <img alt={getPosterTitle(poster)} decoding="async" loading="lazy" src={posterImage} />
         </article>
       )}
 
@@ -293,7 +324,7 @@ function EntrancePage({ entries, onEnter, onRefresh, poster, program, syncMessag
 function ExpiredPage() {
   return (
     <main className="screen expired-screen">
-      <AmbientStage />
+      <AmbientStage compact />
       <section className="success-shell page-fade">
         <p className="eyebrow">入口已关闭</p>
         <h1>
@@ -326,6 +357,58 @@ async function getCameraStream() {
       video: baseVideo,
     })
   }
+}
+
+async function createImageBitmapFromFile(file) {
+  try {
+    return await createImageBitmap(file, { imageOrientation: 'from-image' })
+  } catch {
+    return createImageBitmap(file)
+  }
+}
+
+async function compressAvatarFile(file) {
+  if (!file?.type?.startsWith('image/') || typeof createImageBitmap === 'undefined') {
+    return file
+  }
+
+  const bitmap = await createImageBitmapFromFile(file)
+  const size = Math.min(bitmap.width, bitmap.height)
+  const canvas = document.createElement('canvas')
+  canvas.width = AVATAR_OUTPUT_SIZE
+  canvas.height = AVATAR_OUTPUT_SIZE
+  const context = canvas.getContext('2d')
+
+  if (!context) {
+    bitmap.close?.()
+    return file
+  }
+
+  context.drawImage(
+    bitmap,
+    (bitmap.width - size) / 2,
+    (bitmap.height - size) / 2,
+    size,
+    size,
+    0,
+    0,
+    AVATAR_OUTPUT_SIZE,
+    AVATAR_OUTPUT_SIZE,
+  )
+  bitmap.close?.()
+
+  const blob = await new Promise((resolve) =>
+    canvas.toBlob(resolve, 'image/jpeg', AVATAR_OUTPUT_QUALITY),
+  )
+
+  if (!blob) {
+    return file
+  }
+
+  return new File([blob], `guest-avatar-${Date.now()}.jpg`, {
+    type: 'image/jpeg',
+    lastModified: Date.now(),
+  })
 }
 
 function PhotoCameraCapture({
@@ -412,8 +495,8 @@ function PhotoCameraCapture({
 
     const canvas = document.createElement('canvas')
     const size = Math.min(video.videoWidth, video.videoHeight)
-    canvas.width = 512
-    canvas.height = 512
+    canvas.width = AVATAR_OUTPUT_SIZE
+    canvas.height = AVATAR_OUTPUT_SIZE
     const context = canvas.getContext('2d')
     if (!context) {
       setMessage('当前浏览器无法处理拍照结果。请重试。')
@@ -427,12 +510,12 @@ function PhotoCameraCapture({
       size,
       0,
       0,
-      512,
-      512,
+      AVATAR_OUTPUT_SIZE,
+      AVATAR_OUTPUT_SIZE,
     )
 
     const blob = await new Promise((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', 0.82),
+      canvas.toBlob(resolve, 'image/jpeg', AVATAR_OUTPUT_QUALITY),
     )
     if (!blob) {
       setMessage('当前浏览器无法生成头像文件，请重试。')
@@ -453,7 +536,7 @@ function PhotoCameraCapture({
     fileInputRef.current?.click()
   }
 
-  function handleFileChange(event) {
+  async function handleFileChange(event) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) {
@@ -461,9 +544,18 @@ function PhotoCameraCapture({
     }
 
     stopCameraStream()
-    onChooseFile(file)
-    setCameraState('captured')
-    setMessage('已选择头像。可以重拍，或确认提交进入下一步。')
+    setCameraState('starting')
+    setMessage('正在处理头像。')
+
+    try {
+      onChooseFile(await compressAvatarFile(file))
+      setCameraState('captured')
+      setMessage('已选择并压缩头像。可以重拍，或确认提交进入下一步。')
+    } catch {
+      onChooseFile(file)
+      setCameraState('captured')
+      setMessage('已选择头像。可以重拍，或确认提交进入下一步。')
+    }
   }
 
   function retakePhoto() {
@@ -714,7 +806,7 @@ function CheckInForm({ onSubmit, submitting, submitError }) {
 
   return (
     <main className="screen form-screen">
-      <AmbientStage />
+      <AmbientStage compact />
       <section className="form-shell page-fade">
         <SignalPills />
         <div className="section-heading">
@@ -887,7 +979,7 @@ function SuccessPage({ entry, onReturnHome }) {
 
   return (
     <main className="screen success-screen">
-      <AmbientStage />
+      <AmbientStage compact />
       <section className="success-shell page-fade">
         <p className="eyebrow">已登记</p>
         <h1>
@@ -909,80 +1001,132 @@ function App() {
   const [step, setStep] = useState('entrance')
   const [latestEntry, setLatestEntry] = useState(null)
   const [entries, setEntries] = useState(loadEntries)
+  const [entryCount, setEntryCount] = useState(entries.length)
   const [poster, setPoster] = useState(null)
   const [program, setProgram] = useState(null)
   const [works, setWorks] = useState([])
   const [syncMessage, setSyncMessage] = useState('syncing')
-  const [bootstrapRefreshTick, setBootstrapRefreshTick] = useState(0)
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const bootstrapInFlightRef = useRef(null)
+  const bootstrapAbortRef = useRef(null)
+  const bootstrapLastSyncedAtRef = useRef(0)
+
+  const loadRemoteData = useCallback(
+    async ({ force = false } = {}) => {
+      if (step !== 'entrance') {
+        return null
+      }
+
+      if (!force) {
+        if (document.visibilityState !== 'visible') {
+          return null
+        }
+
+        const elapsed = Date.now() - bootstrapLastSyncedAtRef.current
+        if (bootstrapLastSyncedAtRef.current > 0 && elapsed < BOOTSTRAP_STALE_AFTER_MS) {
+          return null
+        }
+      }
+
+      if (bootstrapInFlightRef.current) {
+        if (force) {
+          bootstrapAbortRef.current?.abort()
+        } else {
+          return bootstrapInFlightRef.current
+        }
+      }
+
+      const controller = new AbortController()
+      if (bootstrapAbortRef.current) {
+        bootstrapAbortRef.current.abort()
+      }
+      bootstrapAbortRef.current = controller
+      setSyncMessage('syncing')
+
+      const task = (async () => {
+        try {
+          const { poster: remotePoster, program: remoteProgram, works: remoteWorks, guests: remoteGuests, guestCount } =
+            await fetchEventBootstrap({
+              cacheMode: force ? 'no-store' : 'default',
+              guestLimit: DISPLAY_GUEST_LIMIT,
+              signal: controller.signal,
+            })
+
+          if (controller.signal.aborted) {
+            return null
+          }
+
+          const normalizedGuests = remoteGuests.map(normalizeGuest).slice(-CACHE_GUEST_LIMIT)
+          localStorage.setItem(storageKey, JSON.stringify(normalizedGuests))
+          setPoster(remotePoster)
+          setProgram(remoteProgram)
+          setWorks(remoteWorks)
+          setEntries(normalizedGuests)
+          setEntryCount(Math.max(guestCount, normalizedGuests.length))
+          setSyncMessage('synced')
+          bootstrapLastSyncedAtRef.current = Date.now()
+          return {
+            poster: remotePoster,
+            program: remoteProgram,
+            works: remoteWorks,
+            guestCount,
+            guests: normalizedGuests,
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            console.warn('Unable to load event data', error)
+            setSyncMessage('offline')
+          }
+          return null
+        } finally {
+          if (bootstrapInFlightRef.current === task) {
+            bootstrapInFlightRef.current = null
+          }
+
+          if (bootstrapAbortRef.current === controller) {
+            bootstrapAbortRef.current = null
+          }
+        }
+      })()
+
+      bootstrapInFlightRef.current = task
+      return task
+    },
+    [step],
+  )
 
   const handleManualRefresh = useCallback(() => {
-    setSyncMessage('syncing')
-    setBootstrapRefreshTick((current) => current + 1)
-  }, [])
+    void loadRemoteData({ force: true })
+  }, [loadRemoteData])
 
   useEffect(() => {
     if (step !== 'entrance') {
       return undefined
     }
 
-    let ignore = false
-    let timer = 0
-    let backoff = 60000
-
-    async function loadRemoteData() {
-      if (ignore || document.visibilityState !== 'visible') {
-        return
-      }
-
-      try {
-        const { poster: remotePoster, program: remoteProgram, works: remoteWorks, guests: remoteGuests } =
-          await fetchEventBootstrap()
-
-        if (ignore) {
-          return
-        }
-
-        const normalizedGuests = remoteGuests.map(normalizeGuest)
-        localStorage.setItem(storageKey, JSON.stringify(normalizedGuests))
-        setPoster(remotePoster)
-        setProgram(remoteProgram)
-        setWorks(remoteWorks)
-        setEntries(normalizedGuests)
-        setSyncMessage('synced')
-        backoff = 60000
-      } catch (error) {
-        console.warn('Unable to load event data', error)
-        if (!ignore) {
-          setSyncMessage('offline')
-          backoff = 5 * 60 * 1000
-        }
-      } finally {
-        if (!ignore && step === 'entrance' && document.visibilityState === 'visible') {
-          window.clearTimeout(timer)
-          timer = window.setTimeout(loadRemoteData, backoff)
-        }
-      }
-    }
-
-    loadRemoteData()
+    void loadRemoteData()
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        loadRemoteData()
-      } else {
-        window.clearTimeout(timer)
+        void loadRemoteData()
       }
     }
 
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      ignore = true
-      window.clearTimeout(timer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+    const onFocus = () => {
+      void loadRemoteData()
     }
-  }, [bootstrapRefreshTick, step])
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      bootstrapAbortRef.current?.abort()
+      bootstrapInFlightRef.current = null
+      bootstrapAbortRef.current = null
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [loadRemoteData, step])
 
   async function handleSubmit(entry) {
     setSubmitting(true)
@@ -996,11 +1140,13 @@ function App() {
       }
       const savedEntry = normalizeGuest({ ...guestPayload, ...(await createGuest(guestPayload)) })
       await clearCheckInDraft()
-      const nextEntries = [...entries, savedEntry]
+      const nextEntries = [...entries, savedEntry].slice(-CACHE_GUEST_LIMIT)
       localStorage.setItem(storageKey, JSON.stringify(nextEntries))
       setLatestEntry(savedEntry)
       setEntries(nextEntries)
+      setEntryCount((current) => Math.max(current + 1, nextEntries.length))
       setSyncMessage('synced')
+      bootstrapLastSyncedAtRef.current = Date.now()
       setStep('success')
     } catch (error) {
       console.warn('Unable to save remote guest', error)
@@ -1052,7 +1198,7 @@ function App() {
           : syncMessage === 'syncing'
             ? '同步中'
             : '离线缓存'}
-        : {entries.length}
+        : {entryCount}
       </aside>
     </div>
   )
